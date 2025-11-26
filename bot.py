@@ -97,6 +97,9 @@ def send_welcome(message):
         f"🎄 Привет, {user_name}! 🎁\n"
         "Добро пожаловать к Гринчу!\n"
         "💰 Оплата — Global24\n"
+        "Актуальные контакты - опер @mrgrinchs\n"
+        "За пробами в лс условия\n"
+        "Резерв на случай если снесут основу @scooby_doorezerv2\n"
         "Выберите город:"
     )
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -267,7 +270,7 @@ def my_orders_command(message):
 
 def send_payment_button(chat_id, order_id, product_name, amount, text):
     # В этом примере — ручная оплата (карта). Если используешь Global24, подставь корректную ссылку.
-    card_number = os.getenv("CARD_NUMBER", "5375 XXXX XXXX 1234")
+    card_number = os.getenv("CARD_NUMBER", "2066 6652 7388 94")
     payment_text = (
         f"{text}\n\n"
         f"💳 *Оплата вручная*\n"
