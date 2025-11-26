@@ -9,7 +9,7 @@ load_dotenv()
 API_TOKEN = os.getenv("API_TOKEN")
 MERCHANT_SECRET = os.getenv("SECRET_KEY")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-TG_WEBHOOK_SECRET = os.getenv("TG_WEBHOOK_SECRET", "SUPERSECRET123")
+TG_WEBHOOK_SECRET = os.getenv("TG_WEBHOOK_SECRET", "z2bn.onrender.com311")
 
 if not API_TOKEN:
     raise RuntimeError("API_TOKEN not set")
