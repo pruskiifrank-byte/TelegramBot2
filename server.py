@@ -78,6 +78,7 @@ def webhook():
 
 @app.route("/payment_callback", methods=["POST"])
 def payment_callback():
+    print("CALLBACK RECEIVED:", request.form)
     data = request.form
     order_id = data.get("order_id")
     amount = data.get("amount")
