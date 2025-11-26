@@ -20,7 +20,7 @@ products = {
     "Товар 1": {
         "photo": "images/Огурец.jpg",
         "description": "Описание Товара 1",
-        "price": 700,
+        "price": 15,
         "delivery_photo": "delivery/adr1.jpg",
         "delivery_text": "📍 Бульвар 1, дом 7 (тайник возле дерева)",
     },
@@ -44,10 +44,7 @@ grinch_jokes = [
 ]
 
 user_data = {}
-
-# orders: order_id -> { user_id, product, status, amount }
 orders = {}
-
 last_text_messages = {}
 
 
@@ -75,23 +72,9 @@ def send_welcome(message):
     )
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("Запорожье")
+
     send_temp_message(chat_id, welcome_text)
     bot.send_message(chat_id, "Выберите город:", reply_markup=markup)
-
-
-@bot.message_handler(commands=["help"])
-def help_command(message):
-    text = (
-        "❓ *Помощь*\n\n"
-        "• Выберите товар и оплатите его через Global24\n"
-        "• После оплаты получите фото и текст с местом подарка\n"
-        "• В случае ошибки напиши в техподдержку\n\n"
-        "Команды:\n"
-        "/start — перезапустить бота\n"
-        "/help — справка\n"
-        "Кнопка 'Мои заказы' — показать активные заказы"
-    )
-    bot.send_message(message.chat.id, text, parse_mode="Markdown")
 
 
 @bot.message_handler(func=lambda m: m.text == "Запорожье")
@@ -99,11 +82,10 @@ def city_choice(message):
     chat_id = message.chat.id
     user_data.setdefault(chat_id, {})
     user_data[chat_id]["city"] = message.text
+
     send_temp_message(chat_id, f"Город выбран: {message.text}")
     send_product_menu(message)
-    bot.send_message(
-        chat_id, "Гринч ворчит: «Опять работа... Ну ладно, выбирай дальше!»"
-    )
+    bot.send_message(chat_id, random.choice(grinch_jokes))
 
 
 def send_product_menu(message):
@@ -120,6 +102,7 @@ def product_choice(message):
     user_data.setdefault(chat_id, {})
     user_data[chat_id]["product"] = message.text
     product = products[message.text]
+
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("Выбрать адрес доставки", "Назад")
 
@@ -138,7 +121,6 @@ def product_choice(message):
             reply_markup=markup,
         )
 
-    # Случайная шутка
     bot.send_message(chat_id, random.choice(grinch_jokes))
 
 
@@ -160,11 +142,6 @@ def address_step(message):
     bot.send_message(chat_id, "Адреса:", reply_markup=markup)
 
 
-@bot.message_handler(func=lambda m: m.text == "⬅️ Вернуться назад")
-def back_from_address(message):
-    send_product_menu(message)
-
-
 @bot.message_handler(func=lambda m: m.text == "⬅️ Назад к товарам")
 def back_to_products(message):
     send_product_menu(message)
@@ -176,17 +153,12 @@ def confirm_order(message):
     user_data.setdefault(chat_id, {})
     user_data[chat_id]["address"] = message.text
 
-    # генерируем уникальный order_id
     order_number = str(random.randint(10000, 99999))
-    # сохраняем в user_data и в orders структуру
     user_data[chat_id]["order_id"] = order_number
 
     product_name = user_data[chat_id].get("product")
-    if not product_name:
-        bot.send_message(chat_id, "Ошибка: товар не выбран. Вернись и выбери товар.")
-        return
-
     amount = products[product_name]["price"]
+
     orders[order_number] = {
         "user_id": chat_id,
         "product": product_name,
@@ -195,12 +167,10 @@ def confirm_order(message):
     }
 
     city = user_data[chat_id].get("city", "—")
-    address = message.text
-
     text = (
         f"✅ Заказ №{order_number} создан!\n\n"
         f"Город: {city}\n"
-        f"Район: {address}\n"
+        f"Район: {message.text}\n"
         f"Товар: {product_name}\n"
         f"Цена: {amount} грн.\n\n"
         "Нажмите кнопку ниже для оплаты:"
@@ -220,12 +190,12 @@ def my_orders(message):
     ]
 
     if not user_orders:
-        bot.send_message(chat_id, "📭 У вас нет активных заказов.")
+        bot.send_message(chat_id, "📭 У вас нет активных заказы.")
         return
 
     text = "📦 Ваши активные заказы:\n\n"
     for oid in user_orders:
-        product = orders[oid].get("product", "—")
+        product = orders[oid].get("product")
         district = user_data.get(chat_id, {}).get("address", "—")
         status = orders[oid].get("status", "—")
         text += f"• №{oid} — {product}, район: {district}, статус: {status}\n"
@@ -233,13 +203,8 @@ def my_orders(message):
     bot.send_message(chat_id, text)
 
 
-@bot.message_handler(commands=["orders"])
-def my_orders_command(message):
-    my_orders(message)
-
-
 def send_payment_button(chat_id, order_id, product_name, amount, text):
-    card_number = "5375 XXXX XXXX 1234"  # твой номер карты
+    card_number = "2066 6652 7388 94"
 
     payment_text = (
         f"{text}\n\n"
@@ -250,6 +215,8 @@ def send_payment_button(chat_id, order_id, product_name, amount, text):
         f"❗ Это занимает 3–10 секунд.\n"
     )
 
+    remove_keyboard = types.ReplyKeyboardRemove()
+
     markup = types.InlineKeyboardMarkup()
     markup.add(
         types.InlineKeyboardButton("✔ Я оплатил", callback_data=f"paid_{order_id}")
@@ -258,7 +225,14 @@ def send_payment_button(chat_id, order_id, product_name, amount, text):
         types.InlineKeyboardButton("❌ Отменить", callback_data=f"cancel_{order_id}")
     )
 
-    bot.send_message(chat_id, payment_text, parse_mode="Markdown", reply_markup=markup)
+    bot.send_message(
+        chat_id,
+        payment_text,
+        parse_mode="Markdown",
+        reply_markup=remove_keyboard,
+    )
+
+    bot.send_message(chat_id, "👇 Выберите действие:", reply_markup=markup)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("cancel_"))
@@ -274,7 +248,6 @@ def cancel_order_callback(call):
     )
     markup.add(types.InlineKeyboardButton("Нет", callback_data="cancel_no"))
 
-    # если заказ не найден — просто ответим
     if not order:
         bot.answer_callback_query(call.id, "Заказ не найден")
         bot.send_message(call.message.chat.id, f"Заказ №{order_id} не найден.")
@@ -291,11 +264,11 @@ def cancel_order_callback(call):
 @bot.callback_query_handler(func=lambda call: call.data.startswith("paid_"))
 def confirm_payment_try(call):
     order_id = call.data.split("_", 1)[1]
-    # просто уведомление — реальную проверку делает webhook на сервере
     bot.answer_callback_query(call.id, "Ожидаю подтверждение оплаты...")
     bot.send_message(
         call.message.chat.id,
         f"⏳ Проверяю платеж для заказа №{order_id}...\nПожалуйста, подождите 3–10 секунд.",
+        reply_markup=types.ReplyKeyboardRemove(),  # скрыть клавиатуру здесь тоже
     )
 
 
@@ -303,6 +276,7 @@ def confirm_payment_try(call):
 def cancel_confirm(call):
     order_id = call.data.split("_", 2)[2]
     order = orders.get(order_id)
+
     if not order:
         bot.answer_callback_query(call.id, "Заказ не найден")
         bot.edit_message_text(
@@ -312,15 +286,17 @@ def cancel_confirm(call):
         )
         return
 
-    # помечаем как отменённый и очищаем user_data
     orders.pop(order_id, None)
     chat_id = order.get("user_id")
-    if chat_id in user_data:
-        user_data.pop(chat_id, None)
+    user_data.pop(chat_id, None)
 
     bot.edit_message_text(
-        f"Заказ №{order_id} отменён.", call.message.chat.id, call.message.message_id
+        f"Заказ №{order_id} отменён.",
+        call.message.chat.id,
+        call.message.message_id,
     )
+
+    bot.send_message(chat_id, "Меню скрыто.", reply_markup=types.ReplyKeyboardRemove())
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "cancel_no")
@@ -334,14 +310,16 @@ def give_product(chat_id, product_name):
         bot.send_message(chat_id, "Ошибка: товар не найден.")
         return
 
-    bot.send_message(chat_id, product["delivery_text"])
+    bot.send_message(
+        chat_id, product["delivery_text"], reply_markup=types.ReplyKeyboardRemove()
+    )
+
     try:
         with open(product["delivery_photo"], "rb") as photo:
             bot.send_photo(chat_id, photo)
     except FileNotFoundError:
         pass
 
-    # очищаем заказ, если он есть (ищем по user_id)
     to_delete = None
     for oid, data in list(orders.items()):
         if data.get("user_id") == chat_id:
@@ -350,10 +328,9 @@ def give_product(chat_id, product_name):
 
     if to_delete:
         orders.pop(to_delete, None)
-    if chat_id in user_data:
-        user_data.pop(chat_id, None)
+    user_data.pop(chat_id, None)
 
-    bot.send_message(chat_id, f"🧹 Заказ обработан и удалён (если он был).")
+    bot.send_message(chat_id, "🎁 Успех! Заказ выполнен.")
 
 
 def process_update(json_str: str):

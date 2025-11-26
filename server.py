@@ -1,24 +1,37 @@
 # server.py
 from flask import Flask, request
-import hmac, hashlib, os
+import hmac, hashlib, os, time
 from dotenv import load_dotenv
-from bot import bot, orders, give_product
+from bot import bot, orders, give_product, process_update
 
 load_dotenv()
 
 API_TOKEN = os.getenv("API_TOKEN")
 MERCHANT_SECRET = os.getenv("SECRET_KEY")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+TG_WEBHOOK_SECRET = os.getenv("TG_WEBHOOK_SECRET", "SUPERSECRET123")
 
 if not API_TOKEN:
     raise RuntimeError("API_TOKEN not set")
 
 app = Flask(__name__)
 
-from bot import process_update
+# ————— АНТИ-ФЛУД для Telegram —————
+user_last_message = {}
+FLOOD_SECONDS = 1.0  # минимальный интервал между запросами
+
+
+def is_flood(chat_id):
+    now = time.time()
+    last = user_last_message.get(chat_id, 0)
+    if now - last < FLOOD_SECONDS:
+        return True
+    user_last_message[chat_id] = now
+    return False
 
 
 # ————— ЛОГИРОВАНИЕ ПОВТОРНЫХ CALLBACK —————
+
 
 def log_event(order_id, reason, data):
     with open("callbacks.log", "a", encoding="utf-8") as f:
@@ -27,14 +40,13 @@ def log_event(order_id, reason, data):
 
 # ————— Проверка подписи —————
 
+
 def verify_signature(string: str, signature: str) -> bool:
     if not MERCHANT_SECRET:
         return False
 
     calc = hmac.new(
-        MERCHANT_SECRET.encode(),
-        string.encode(),
-        hashlib.sha256
+        MERCHANT_SECRET.encode(), string.encode(), hashlib.sha256
     ).hexdigest()
 
     return hmac.compare_digest(calc, signature)
@@ -45,13 +57,32 @@ def home():
     return "Bot is running!"
 
 
+# ————————————————
+# 🔥 WEBHOOK TELEGRAM
+# ————————————————
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    raw = request.get_data().decode("utf-8")
-    process_update(raw)
+    # ——— Проверка секретного токена Telegram ———
+    secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+    if secret != TG_WEBHOOK_SECRET:
+        return "Forbidden", 403
+
+    # ——— Анти-флуд на стороне сервера ———
+    raw = request.get_json(force=True, silent=True)
+    if raw and "message" in raw:
+        chat_id = raw["message"]["chat"]["id"]
+        if is_flood(chat_id):
+            return "OK", 200
+
+    # ——— Передача обновления в бота ———
+    raw_text = request.get_data().decode("utf-8")
+    process_update(raw_text)
     return "OK", 200
 
 
+# ————————————————
+# 🔥 CALLBAСK ОТ GLOBAL24
+# ————————————————
 @app.route("/payment_callback", methods=["POST"])
 def payment_callback():
     data = request.form
@@ -64,7 +95,7 @@ def payment_callback():
     if not order_id or not signature:
         return "Invalid", 400
 
-    # ——— Проверка подписи ———
+    # ——— Проверка подписи Global24 ———
     string = f"{order_id}{amount}{status}"
 
     if not verify_signature(string, signature):
@@ -104,10 +135,11 @@ def payment_callback():
     return "OK", 200
 
 
+# ————————————————
 @app.route("/set_webhook", methods=["GET"])
 def set_webhook():
     bot.remove_webhook()
-    ok = bot.set_webhook(url=WEBHOOK_URL + "/webhook")
+    ok = bot.set_webhook(url=WEBHOOK_URL + "/webhook", secret_token=TG_WEBHOOK_SECRET)
     return f"Webhook set: {ok}", 200
 
 
