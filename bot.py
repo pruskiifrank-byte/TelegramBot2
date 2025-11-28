@@ -104,6 +104,36 @@ def send_welcome(message):
     bot.send_message(chat_id, "Выберите город:", reply_markup=markup)
 
 
+# Обработчик для кнопок "Назад" и "Выбрать адрес доставки"
+
+
+@bot.message_handler(func=lambda m: m.text in ["Назад", "Выбрать адрес доставки"])
+def address_step(message):
+    chat_id = message.chat.id
+    if is_flood_message(chat_id):
+        return
+
+    # Кнопка "Назад" просто возвращает к списку товаров
+    if message.text == "Назад":
+        send_product_menu(message)
+        return
+
+    # Кнопка "Выбрать адрес доставки" — показываем клавиатуру с адресами
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    for addr in delivery_addresses:
+        markup.add(addr)
+    # добавляем опцию вернуться к товарам
+    markup.add("⬅️ Назад к товарам")
+    send_temp_message(chat_id, "Выберите район доставки:")
+    bot.send_message(chat_id, "Адреса:", reply_markup=markup)
+
+
+# Обработчик для кнопки "⬅️ Назад к товарам"
+@bot.message_handler(func=lambda m: m.text == "⬅️ Назад к товарам")
+def back_to_products(message):
+    send_product_menu(message)
+
+
 # ---------------------------------------
 #            Город
 # ---------------------------------------
@@ -126,6 +156,34 @@ def send_product_menu(message):
         markup.add(p)
     markup.add("Мои заказы")
     bot.send_message(chat_id, "Выберите товар:", reply_markup=markup)
+
+
+# Обработчик для кнопок "Назад" и "Выбрать адрес доставки"
+@bot.message_handler(func=lambda m: m.text in ["Назад", "Выбрать адрес доставки"])
+def address_step(message):
+    chat_id = message.chat.id
+    if is_flood_message(chat_id):
+        return
+
+    # Кнопка "Назад" просто возвращает к списку товаров
+    if message.text == "Назад":
+        send_product_menu(message)
+        return
+
+    # Кнопка "Выбрать адрес доставки" — показываем клавиатуру с адресами
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    for addr in delivery_addresses:
+        markup.add(addr)
+    # добавляем опцию вернуться к товарам
+    markup.add("⬅️ Назад к товарам")
+    send_temp_message(chat_id, "Выберите район доставки:")
+    bot.send_message(chat_id, "Адреса:", reply_markup=markup)
+
+
+# Обработчик для кнопки "⬅️ Назад к товарам"
+@bot.message_handler(func=lambda m: m.text == "⬅️ Назад к товарам")
+def back_to_products(message):
+    send_product_menu(message)
 
 
 # ---------------------------------------
