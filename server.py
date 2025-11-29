@@ -2,28 +2,26 @@ from flask import Flask, request, abort
 import traceback
 from bot.bot import bot
 from bot.payment import handle_oxapay_callback
-from bot.config import TELEGRAM_TOKEN, TG_WEBHOOK_SECRET
+from bot.config import TG_WEBHOOK_SECRET  # секрет для URL, не заголовок
 
 app = Flask(__name__)
-
-
-# Проверка подписи Telegram webhook
-def verify_telegram(req):
-    return req.headers.get("X-Telegram-Bot-Api-Secret-Token") == TG_WEBHOOK_SECRET
 
 
 # --- Telegram webhook ---
 @app.route(f"/webhook/{TG_WEBHOOK_SECRET}", methods=["POST"])
 def tg_webhook():
     try:
-        if not verify_telegram(request):
-            abort(403)
-
-        update = request.get_json()
-        if not update:
+        update_json = request.get_json()
+        if not update_json:
             abort(400)
 
-        bot.process_new_updates([update])
+        # Преобразуем dict в объект Update
+        from telebot.types import Update
+
+        update_obj = Update.de_json(update_json)
+
+        # Обработка апдейта
+        bot.process_new_updates([update_obj])
         return "OK", 200
 
     except Exception as e:
@@ -39,10 +37,13 @@ def oxapay_webhook():
         data = request.get_json()
         if not data:
             return "No JSON", 400
+
         ok = handle_oxapay_callback(data)
         if not ok:
             return "Invalid", 400
+
         return "OK", 200
+
     except Exception as e:
         print("❌ OxaPay webhook error:", e)
         traceback.print_exc()
