@@ -12,30 +12,24 @@ def verify_telegram(req):
 
 
 # --- Telegram webhook ---
-@app.route(f"/webhook/{TELEGRAM_TOKEN}", methods=["POST"])
+@app.route(f"/webhook/{TG_WEBHOOK_SECRET}", methods=["POST"])
 def tg_webhook():
-    if not verify_telegram(request):
-        abort(403)
-
     update = request.get_json()
+    if not update:
+        abort(400)
     bot.process_new_updates([update])
-    return "OK"
+    return "OK", 200
 
 
 # --- OxaPay IPN ---
 @app.route("/oxapay/ipn", methods=["POST"])
 def oxapay_webhook():
-
     data = request.get_json()
-
     if not data:
         return "No JSON", 400
-
     ok = handle_oxapay_callback(data)
-
     if not ok:
         return "Invalid", 400
-
     return "OK", 200
 
 
