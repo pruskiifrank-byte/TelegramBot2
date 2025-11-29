@@ -6,38 +6,33 @@ from bot.config import OXAPAY_API_KEY, BASE_URL
 from bot.storage import orders
 
 
-OXAPAY_INVOICE_URL = "https://api.oxapay.com/v1/payment/invoice"
+OXAPAY_INVOICE_URL = "https://api.oxapay.com/v1/merchant/create-invoice"
 
 
 def create_invoice(user_id: int, amount_usd: float, file_path: str):
     """
-    Создание платежного инвойса в Oxapay
+    Создание платежного инвойса в OxaPay
     """
-
     order_id = str(int(time.time()))
 
-    # ВАЖНО! header = merchant_key
-    headers = {"merchant_key": OXAPAY_API_KEY, "Content-Type": "application/json"}
+    # Заголовки — только Content-Type
+    headers = {"Content-Type": "application/json"}
 
+    # Тело запроса строго по документации
     payload = {
+        "merchant_id": OXAPAY_API_KEY,
         "amount": amount_usd,
         "currency": "USD",
-        "lifetime": 30,
-        "fee_paid_by_payer": 1,
-        "under_paid_coverage": 0,
-        "to_currency": "USDT",
-        "auto_withdrawal": False,
-        "mixed_payment": False,
-        "callback_url": f"{BASE_URL}/oxapay/ipn",
-        "return_url": "https://t.me/yourbot",
-        "email": "",
         "order_id": order_id,
-        "thanks_message": "Спасибо за покупку!",
-        "description": "Digital Product",
-        "sandbox": False,
+        "callback_url": f"{BASE_URL}/oxapay/ipn",
+        "success_url": "https://t.me/yourbot",
+        "cancel_url": "https://t.me/yourbot",
+        "description": "Digital product",
+        "lifetime": 30,
+        "under_paid_cover": False,
+        "fee_paid_by_payer": True,
     }
 
-    # ВАЖНО: JSON отправляется как json=payload, НЕ data=
     response = requests.post(OXAPAY_INVOICE_URL, json=payload, headers=headers)
 
     try:
@@ -48,16 +43,16 @@ def create_invoice(user_id: int, amount_usd: float, file_path: str):
 
     print("OXAPAY DEBUG =", data)
 
-    # Успешный результат — result == 100
+    # Проверка успешности
     if data.get("result") != 100:
-        print("OXAPAY ERROR: result != 100")
+        print("OXAPAY ERROR:", data.get("message"))
         return None
 
-    pay_link = data.get("payLink")
-    track_id = data.get("trackId")
+    pay_link = data.get("payment_url")
+    track_id = data.get("track_id")
 
     if not pay_link:
-        print("OXAPAY ERROR: no payLink")
+        print("OXAPAY ERROR: no payment_url")
         return None
 
     # сохраняем заказ
@@ -73,9 +68,8 @@ def create_invoice(user_id: int, amount_usd: float, file_path: str):
 
 def handle_oxapay_callback(data: dict):
     """
-    Обработка IPN от Oxapay
+    Обработка IPN от OxaPay
     """
-
     order_id = data.get("order_id")
     status = data.get("status")
 
@@ -85,8 +79,7 @@ def handle_oxapay_callback(data: dict):
     if order_id not in orders:
         return False
 
-    # Пример статусов:
-    # paid, pending, expired, underpaid, canceled
+    # paid / canceled / expired / pending / underpaid
     orders[order_id]["status"] = status
 
     return True
