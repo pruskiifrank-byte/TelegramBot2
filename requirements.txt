@@ -1,5 +1,6 @@
+flask
 pytelegrambotapi
-Flask
 python-dotenv
-gunicorn
 requests
+gunicorn
+    
