@@ -152,7 +152,8 @@ def handle_shop_selection(call):
 # -------------------------
 @bot.callback_query_handler(func=lambda call: call.data.startswith("addr_"))
 def handle_address_selection(call):
-    bot.answer_callback_query(call.id)
+    bot.answer_callback_query(call.id, text="⏳ Создаю инвойс...")
+
     uid = call.from_user.id
 
     # 1. Извлекаем данные: 'addr_fruits_Бульвар Шевченко'
