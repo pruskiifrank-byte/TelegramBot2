@@ -1,85 +1,92 @@
-# bot/payment_oxapay.py
-import time
-import json
 import requests
+import json
+import time
 from bot.config import OXAPAY_API_KEY, BASE_URL
 from bot.storage import orders
 
 
-OXAPAY_INVOICE_URL = "https://api.oxapay.com/v1/merchant/create-invoice"
+OXAPAY_INVOICE_URL = "https://api.oxapay.com/v1/payment/invoice"
 
 
-def create_invoice(user_id: int, amount_usd: float, file_path: str):
+def create_invoice(user_id, amount_usd, file_path):
     """
-    Создание платежного инвойса в OxaPay
+    Создание инвойса по новой схеме OxaPay v1
     """
-    order_id = str(int(time.time()))
 
-    # Заголовки — только Content-Type
-    headers = {"Content-Type": "application/json"}
+    order_id = f"ORD-{int(time.time())}"
 
-    # Тело запроса строго по документации
-    payload = {
-        "merchant_id": OXAPAY_API_KEY,
+    headers = {"merchant_api_key": OXAPAY_API_KEY, "Content-Type": "application/json"}
+
+    data = {
         "amount": amount_usd,
         "currency": "USD",
-        "order_id": order_id,
+        "lifetime": 60,
+        "fee_paid_by_payer": 1,
+        "under_paid_coverage": 10,
+        "to_currency": "USDT",
+        "auto_withdrawal": False,
+        "mixed_payment": True,
+        # Webhook для callback
         "callback_url": f"{BASE_URL}/oxapay/ipn",
-        "success_url": "https://t.me/yourbot",
-        "cancel_url": "https://t.me/yourbot",
-        "description": "Digital product",
-        "lifetime": 30,
-        "under_paid_cover": False,
-        "fee_paid_by_payer": True,
+        # Куда вернуть покупателя после оплаты
+        "return_url": "https://t.me/yourbot",
+        "email": "",
+        "order_id": order_id,
+        "thanks_message": "Спасибо за оплату!",
+        "description": "Номер заказа " + order_id,
+        "sandbox": False,
     }
 
-    response = requests.post(OXAPAY_INVOICE_URL, json=payload, headers=headers)
+    response = requests.post(OXAPAY_INVOICE_URL, data=json.dumps(data), headers=headers)
 
-    try:
-        data = response.json()
-    except:
-        print("OXAPAY ERROR: invalid JSON")
+    result = response.json()
+
+    # Успешный ответ строго такой:
+    # {
+    #   "data": {
+    #       "track_id": "...",
+    #       "payment_url": "https://pay.oxapay.com/...",
+    #       ...
+    #   },
+    #   "status": 200
+    # }
+
+    if result.get("status") != 200:
         return None
 
-    print("OXAPAY DEBUG =", data)
+    payment_data = result["data"]
+    pay_url = payment_data["payment_url"]
 
-    # Проверка успешности
-    if data.get("result") != 100:
-        print("OXAPAY ERROR:", data.get("message"))
-        return None
-
-    pay_link = data.get("payment_url")
-    track_id = data.get("track_id")
-
-    if not pay_link:
-        print("OXAPAY ERROR: no payment_url")
-        return None
-
-    # сохраняем заказ
+    # сохраняем заказ в RAM (storage.py)
     orders[order_id] = {
         "user_id": user_id,
         "file": file_path,
         "status": "pending",
-        "trackId": track_id,
+        "track_id": payment_data["track_id"],
     }
 
-    return order_id, pay_link
+    return order_id, pay_url
 
 
-def handle_oxapay_callback(data: dict):
+def handle_oxapay_callback(data):
     """
-    Обработка IPN от OxaPay
+    Принимаем IPN callback от OxaPay.
+    В новой версии API формат другой.
     """
+
     order_id = data.get("order_id")
-    status = data.get("status")
+    track_id = data.get("track_id")
+    status = data.get(
+        "status"
+    )  # "paid", "confirmed", "expired", "canceled", "underpaid"
+    amount = data.get("amount")
 
-    if not order_id or not status:
+    if not order_id or order_id not in orders:
         return False
 
-    if order_id not in orders:
-        return False
-
-    # paid / canceled / expired / pending / underpaid
+    # сохраняем статус
     orders[order_id]["status"] = status
+    orders[order_id]["paid_amount"] = amount
+    orders[order_id]["track_id"] = track_id
 
     return True
