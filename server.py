@@ -1,5 +1,6 @@
 import os
 from flask import Flask, request, abort
+import telebot
 from bot.bot import bot, give_product
 from bot.payment import handle_oxapay_callback
 from bot.storage import orders, get_order
