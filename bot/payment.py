@@ -25,14 +25,14 @@ def create_invoice(user_id, amount_usd, file_path):
         data = response.json()
     except:
         print("OxaPay ERROR: not JSON:", response.text)
-    return None
+        return None
 
     print("OXAPAY DEBUG =", data)  # ← Добавлено
 
     if not data.get("msg"):
         print("OXAPAY ERROR msg=False:", data)
         return None
-    
+
     pay_url = data["link"]
 
     orders[order_id] = {
