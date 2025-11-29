@@ -2,7 +2,7 @@
 import os
 from flask import Flask, request, abort
 from bot.bot import bot  # Твой TeleBot
-from bot.payment_oxapay import handle_oxapay_callback
+from bot.payment import handle_oxapay_callback
 from bot.storage import orders
 
 app = Flask(__name__)
