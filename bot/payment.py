@@ -37,7 +37,7 @@ def create_invoice(user_id, amount_usd, file_path):
         "sandbox": False,
     }
 
-    response = requests.post(OXAPAY_INVOICE_URL, data=json.dumps(data), headers=headers)
+    response = requests.post(OXAPAY_INVOICE_URL, json=data, headers=headers)
 
     result = response.json()
 
@@ -52,6 +52,7 @@ def create_invoice(user_id, amount_usd, file_path):
     # }
 
     if result.get("status") != 200:
+        print(f"OxaPay API error: {result}")  # Логирование ошибки
         return None
 
     payment_data = result["data"]
