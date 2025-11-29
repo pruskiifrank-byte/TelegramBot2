@@ -165,7 +165,7 @@ def handle_buttons(message):
         file_path = product["file"]
         product_name = product["name"]
 
-        # создаём инвойс через OxaPay (модуль payment_oxapay.create_invoice)
+        # создаём инвойс через OxaPay (модуль payment.create_invoice)
         resp = create_invoice(uid, price, file_path)
         if not resp:
             bot.send_message(uid, "Ошибка создания платежа. Попробуйте позже.")
