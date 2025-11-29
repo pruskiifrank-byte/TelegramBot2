@@ -16,7 +16,8 @@ def create_invoice(user_id: int, amount_usd: float, file_path: str):
 
     order_id = str(int(time.time()))
 
-    headers = {"merchant_api_key": OXAPAY_API_KEY, "Content-Type": "application/json"}
+    # ВАЖНО! header = merchant_key
+    headers = {"merchant_key": OXAPAY_API_KEY, "Content-Type": "application/json"}
 
     payload = {
         "amount": amount_usd,
@@ -36,9 +37,8 @@ def create_invoice(user_id: int, amount_usd: float, file_path: str):
         "sandbox": False,
     }
 
-    response = requests.post(
-        OXAPAY_INVOICE_URL, data=json.dumps(payload), headers=headers
-    )
+    # ВАЖНО: JSON отправляется как json=payload, НЕ data=
+    response = requests.post(OXAPAY_INVOICE_URL, json=payload, headers=headers)
 
     try:
         data = response.json()
