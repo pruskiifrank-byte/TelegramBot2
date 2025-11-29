@@ -17,24 +17,29 @@ def create_invoice(user_id, amount_usd, file_path):
         "currency": "USD",
         "orderId": order_id,
         "callbackUrl": f"{BASE_URL}/oxapay/ipn",
-        "returnUrl": "https://t.me/yourbot"
+        "returnUrl": "https://t.me/yourbot",
     }
 
     response = requests.post(url, json=payload)
-    data = response.json()
+    try:
+        data = response.json()
+    except:
+        print("OxaPay ERROR: not JSON:", response.text)
+    return None
 
-    # Успешный ответ OxaPay:
-    # { "msg": true, "link": "...", "trackId": 123456 }
+    print("OXAPAY DEBUG =", data)  # ← Добавлено
+
     if not data.get("msg"):
+        print("OXAPAY ERROR msg=False:", data)
         return None
-
+    
     pay_url = data["link"]
 
     orders[order_id] = {
         "user_id": user_id,
         "file": file_path,
         "status": "pending",
-        "trackId": data["trackId"]
+        "trackId": data["trackId"],
     }
 
     return order_id, pay_url
