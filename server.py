@@ -36,7 +36,7 @@ def oxapay_ipn():
     if not data:
         abort(400)
 
-    # 1. Обрабатываем и сохраняем статус в БД
+    # 1. Обрабатываем и сохраняем статус в БД (handle_oxapay_callback)
     success = handle_oxapay_callback(data)
     if not success:
         return "INVALID", 400
@@ -45,14 +45,14 @@ def oxapay_ipn():
     order_id = data.get("order_id")
     order = get_order(order_id)
     
-    # Статус "paid" означает, что деньги зачислены полностью
-    if order and order.get("status") == "paid":
+    # ЕСЛИ СТАТУС ОПЛАЧЕН И ТОВАР ЕЩЕ НЕ ВЫДАН
+    if order and order.get("status") == "paid" and order.get("delivery_status") != "delivered":
         user_id = order.get("user_id")
         
-        # Вызываем функцию выдачи из bot.py
+        # 3. Вызываем функцию выдачи места выдачи!
         if user_id:
             give_product(user_id, order_id)
-
+            
     return "OK", 200
 
 @app.route("/")
