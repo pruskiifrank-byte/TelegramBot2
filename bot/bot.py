@@ -111,7 +111,9 @@ def handle_main_menu_buttons(message):
 # -------------------------
 @bot.callback_query_handler(func=lambda call: call.data.startswith("shop_"))
 def handle_shop_selection(call):
-    bot.answer_callback_query(call.id)
+    # 🚨 ИЗМЕНЕНИЕ: Добавляем временный текст, чтобы обеспечить мгновенный ответ и UX
+    bot.answer_callback_query(call.id, text="Загружаю адреса...", show_alert=False)
+
     uid = call.from_user.id
 
     # 1. Извлекаем ключ магазина (shop_fruits -> fruits)
