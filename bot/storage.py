@@ -1,9 +1,9 @@
-# bot/storage.py
 import json
 import threading
 from pathlib import Path
 
 _lock = threading.Lock()
+# Файл будет создан в корне проекта (рядом с server.py)
 _orders_path = Path(__file__).parent.parent / "orders.json"
 
 # in-memory orders dict: order_id -> {...}
@@ -26,7 +26,6 @@ def load_orders():
             for k, v in data.items():
                 orders[k] = v
     except Exception:
-        # ignore load errors, keep empty
         pass
 
 def save_orders():
@@ -36,7 +35,7 @@ def save_orders():
     except Exception:
         pass
 
-# convenience helpers
+# Helpers
 def add_order(order_id: str, payload: dict):
     orders[order_id] = payload
     save_orders()
@@ -54,5 +53,5 @@ def get_order(order_id: str):
 def find_orders_by_user(user_id: int):
     return {oid: d for oid, d in orders.items() if d.get("user_id") == user_id}
 
-# load from disk on import
+# Загружаем при старте
 load_orders()
