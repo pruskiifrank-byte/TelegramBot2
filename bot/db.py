@@ -1,40 +1,170 @@
-# bot/db.py
-import os
-import psycopg2
-from bot.config import DATABASE_URL
+# bot/storage.py
+from .db import execute_query
 
 
-def get_connection():
-    """Устанавливает и возвращает соединение с базой данных."""
-    if not DATABASE_URL:
-        print("❌ ОШИБКА: Не задан DATABASE_URL")
-        return None
-    try:
-        conn = psycopg2.connect(DATABASE_URL)
-        return conn
-    except Exception as e:
-        print(f"🚨 Ошибка подключения к БД: {e}")
-        return None
+# --- ПОЛЬЗОВАТЕЛИ (РАССЫЛКА) ---
+def upsert_user(user_id, username, first_name):
+    """Сохраняет пользователя или обновляет его данные."""
+    query = """
+    INSERT INTO users (user_id, username, first_name)
+    VALUES (%s, %s, %s)
+    ON CONFLICT (user_id) DO UPDATE 
+    SET username = EXCLUDED.username, first_name = EXCLUDED.first_name;
+    """
+    execute_query(query, (user_id, username, first_name))
 
 
-def execute_query(query, params=None, fetch=False):
-    """Выполняет SQL-запрос."""
-    conn = get_connection()
-    if not conn:
-        return None
+def get_all_users():
+    """Возвращает список ID всех пользователей."""
+    res = execute_query("SELECT user_id FROM users;", fetch=True)
+    return [row[0] for row in res] if res else []
 
-    result = None
-    try:
-        with conn.cursor() as cur:
-            cur.execute(query, params)
-            if fetch:
-                result = cur.fetchall()
-            conn.commit()
-    except Exception as e:
-        print(f"🚨 SQL ERROR: {e}\nQuery: {query}")
-        conn.rollback()
-    finally:
-        if conn:
-            conn.close()
 
-    return result
+# --- МАГАЗИНЫ И ТОВАРЫ ---
+def get_all_stores():
+    query = "SELECT store_id, title FROM stores ORDER BY store_id;"
+    results = execute_query(query, fetch=True)
+    stores_list = []
+    if results:
+        for row in results:
+            stores_list.append({"store_id": row[0], "title": row[1]})
+    return stores_list
+
+
+def get_products_by_store(store_id):
+    query = "SELECT product_id, name, price_usd FROM products WHERE store_id = %s ORDER BY product_id;"
+    results = execute_query(query, (store_id,), fetch=True)
+    products_list = []
+    if results:
+        for row in results:
+            products_list.append(
+                {"product_id": row[0], "name": row[1], "price_usd": float(row[2])}
+            )
+    return products_list
+
+
+def get_product_details_by_id(product_id):
+    query = """
+    SELECT p.price_usd, p.file_path, p.delivery_text, p.name, s.title 
+    FROM products p 
+    JOIN stores s ON p.store_id = s.store_id 
+    WHERE p.product_id = %s;
+    """
+    result = execute_query(query, (product_id,), fetch=True)
+    if result:
+        row = result[0]
+        return {
+            "price_usd": float(row[0]),
+            "file_path": row[1],
+            "delivery_text": row[2],
+            "product_name": row[3],
+            "shop_title": row[4],
+        }
+    return None
+
+
+# --- АДМИНКА (РЕДАКТИРОВАНИЕ) ---
+def insert_product(store_id, name, price, delivery_text, file_path):
+    query = """
+    INSERT INTO products (store_id, name, price_usd, delivery_text, file_path)
+    VALUES (%s, %s, %s, %s, %s);
+    """
+    execute_query(query, (store_id, name, price, delivery_text, file_path))
+
+
+def update_product_field(product_id, field, value):
+    """Обновляет одно поле товара (name, price_usd, delivery_text, file_path)."""
+    # ВНИМАНИЕ: field подставляется через f-строку, использовать только с проверенными ключами!
+    allowed_fields = ["name", "price_usd", "delivery_text", "file_path"]
+    if field not in allowed_fields:
+        return
+
+    query = f"UPDATE products SET {field} = %s WHERE product_id = %s;"
+    execute_query(query, (value, product_id))
+
+
+def delete_product(product_id):
+    execute_query("DELETE FROM products WHERE product_id = %s;", (product_id,))
+
+
+# --- ЗАКАЗЫ ---
+def add_order(
+    user_id,
+    product_id,
+    price_usd,
+    pickup_address,
+    order_id,
+    oxapay_track_id,
+    payment_url,
+):
+    query = """
+    INSERT INTO orders (
+        order_id, user_id, product_id, price_usd, 
+        pickup_address, oxapay_track_id, payment_url, status, delivery_status
+    )
+    VALUES (%s, %s, %s, %s, %s, %s, %s, 'waiting_payment', 'pending');
+    """
+    execute_query(
+        query,
+        (
+            order_id,
+            user_id,
+            product_id,
+            price_usd,
+            pickup_address,
+            oxapay_track_id,
+            payment_url,
+        ),
+    )
+    return order_id
+
+
+def update_order(order_id, **kwargs):
+    if not kwargs:
+        return
+    set_clauses = []
+    params = []
+    for key, value in kwargs.items():
+        set_clauses.append(f"{key} = %s")
+        params.append(value)
+    params.append(order_id)
+    query = f"UPDATE orders SET {', '.join(set_clauses)} WHERE order_id = %s;"
+    execute_query(query, tuple(params))
+
+
+def get_order(order_id):
+    query = "SELECT * FROM orders WHERE order_id = %s;"
+    result = execute_query(query, (order_id,), fetch=True)
+    if result:
+        # Упрощенный маппинг по индексам (будьте внимательны к порядку колонок в CREATE TABLE)
+        # 0:order_id, 1:user_id, 2:product_id, 3:pickup, 4:price, 5:status, 6:delivery_status...
+        return {
+            "order_id": result[0][0],
+            "user_id": result[0][1],
+            "product_id": result[0][2],
+            "delivery_status": result[0][6],
+            "status": result[0][5],
+        }
+    return None
+
+
+def find_orders_by_user(user_id):
+    query = """
+    SELECT o.order_id, o.status, o.price_usd, p.name, o.delivery_status
+    FROM orders o
+    JOIN products p ON o.product_id = p.product_id
+    WHERE o.user_id = %s 
+    ORDER BY o.created_at DESC;
+    """
+    results = execute_query(query, (user_id,), fetch=True)
+    orders_dict = {}
+    if results:
+        for row in results:
+            oid, status, price, p_name, d_status = row
+            orders_dict[oid] = {
+                "status": status,
+                "price": float(price),
+                "product_name": p_name,
+                "delivery_status": d_status,
+            }
+    return orders_dict

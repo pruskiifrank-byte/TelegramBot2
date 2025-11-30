@@ -1,36 +1,35 @@
 # init_db.py
 from bot.db import execute_query
 
-# Инициализация для старта
-# Тут нет товаров, их добавишь через Админку в боте!
+# Каталог для примера (пустой, так как добавляем через админку)
 CATALOG = {
-    "fruits": {"title": "🍎 Фрукты (Тест)"},
-    "vegs": {"title": "🥕 Овощи (Тест)"},
+    "test": {"title": "📂 Тестовая категория"}
 }
 
-
 def create_tables():
-    print("🧹 Удаление старых таблиц...")
-    execute_query("DROP TABLE IF EXISTS orders;")
-    execute_query("DROP TABLE IF EXISTS products;")
-    execute_query("DROP TABLE IF EXISTS stores;")
+    print("🛠 Проверка и обновление таблиц...")
+    
+    # 1. Таблица пользователей (НОВАЯ)
+    execute_query("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id BIGINT PRIMARY KEY,
+            username TEXT,
+            first_name TEXT,
+            joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
 
-    print("🛠 Создание таблиц...")
-
-    # Stores
-    execute_query(
-        """
-        CREATE TABLE stores (
+    # 2. Магазины
+    execute_query("""
+        CREATE TABLE IF NOT EXISTS stores (
             store_id SERIAL PRIMARY KEY,
             title TEXT NOT NULL
         );
-    """
-    )
+    """)
 
-    # Products (file_path теперь хранит file_id телеграма)
-    execute_query(
-        """
-        CREATE TABLE products (
+    # 3. Товары
+    execute_query("""
+        CREATE TABLE IF NOT EXISTS products (
             product_id SERIAL PRIMARY KEY,
             store_id INTEGER REFERENCES stores(store_id), 
             name TEXT NOT NULL,
@@ -38,13 +37,11 @@ def create_tables():
             delivery_text TEXT NOT NULL,
             file_path TEXT NOT NULL 
         );
-    """
-    )
+    """)
 
-    # Orders (добавлен delivery_status)
-    execute_query(
-        """
-        CREATE TABLE orders (
+    # 4. Заказы
+    execute_query("""
+        CREATE TABLE IF NOT EXISTS orders (
             order_id TEXT PRIMARY KEY,
             user_id BIGINT NOT NULL,
             product_id INTEGER REFERENCES products(product_id),
@@ -57,18 +54,17 @@ def create_tables():
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             paid_at TIMESTAMP WITH TIME ZONE
         );
-    """
-    )
+    """)
 
-    print("✅ Таблицы созданы.")
-
+    print("✅ Таблицы готовы.")
 
 def populate_stores():
-    print("🏪 Создание категорий...")
-    for key, data in CATALOG.items():
-        execute_query("INSERT INTO stores (title) VALUES (%s)", (data["title"],))
-    print("✅ Категории созданы. Товары добавляй через /admin в боте.")
-
+    # Проверка, есть ли магазины, если нет - создаем тестовый
+    res = execute_query("SELECT count(*) FROM stores;", fetch=True)
+    if res and res[0][0] == 0:
+        print("🏪 Создание базовых категорий...")
+        for key, data in CATALOG.items():
+            execute_query("INSERT INTO stores (title) VALUES (%s)", (data["title"],))
 
 if __name__ == "__main__":
     create_tables()
