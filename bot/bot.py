@@ -1,25 +1,70 @@
 # bot/bot.py
-
 import telebot
 from telebot import types
 import time
+from datetime import datetime, timedelta
+import math
+import random  # <-- НОВЫЙ ИМПОРТ ДЛЯ ШУТОК
 from bot.config import TELEGRAM_TOKEN
 from bot.payment import create_invoice
+
+# Импорты ниже должны быть из bot/storage и bot/db
 from bot.storage import update_order, find_orders_by_user, get_order, add_order
 from bot.storage import get_all_stores, get_products_by_store, get_product_details_by_id
 from bot.db import execute_query
 
 # -------------------------
-# Константы и состояние
+# Константы, состояние и Анти-Флуд
 # -------------------------
 ADDRESSES = ["Бульвар Шевченко", "Ул. Победы", "Проспект Мира"]
 user_state = {}
 
+# Константы для Анти-Флуда
+FLOOD_LIMIT_SECONDS = 0.8
+flood_control = {}
+
+# Константы для Бронирования
+INITIAL_RESERVATION_HOURS = 4
+EXTENSION_HOURS = 6
+EXTENSION_FEE = 0.10
+
+# НОВАЯ КОНСТАНТА: Максимальное количество неоплаченных заказов
+MAX_UNPAID_ORDERS = 3
+
+# ТЕМАТИЧЕСКИЕ ШУТКИ ГРИНЧА
+grinch_jokes = [
+    "😈 Гринч ворчит: «Опять ты… ну ладно, выбирай!»",
+    "🎁 Гринч шепчет: «Это не подарок… это стратегическая пакость!»",
+    "💚 «Не переживай, я почти добрый сегодня!»",
+    "👀 «Если что-то пойдёт не так — это не я!»",
+]
+
 # Создаём бота
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="HTML", threaded=False)
 
+
 # -------------------------
-# Клавиатуры и команды
+# АНТИ-ФЛУД ДЕКОРАТОР (ОСТАЕТСЯ БЕЗ ИЗМЕНЕНИЙ)
+# -------------------------
+def anti_flood(func):
+    """Декоратор для ограничения частоты сообщений от пользователя."""
+
+    def wrapper(message):
+        uid = message.chat.id
+        current_time = time.time()
+        last_time = flood_control.get(uid, 0)
+
+        if current_time - last_time < FLOOD_LIMIT_SECONDS:
+            return
+
+        flood_control[uid] = current_time
+        return func(message)
+
+    return wrapper
+
+
+# -------------------------
+# ХЕЛПЕРЫ ДЛЯ КЛАВИАТУР (ОБНОВЛЕНО)
 # -------------------------
 
 
@@ -27,262 +72,338 @@ def main_menu():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add(types.KeyboardButton("🛒 Купить"))
     kb.add(types.KeyboardButton("📦 Мои заказы"))
+    kb.add(types.KeyboardButton("📍 Показать адрес"))
     return kb
 
 
-def back_to_main_menu():
+def back_to_main_menu_inline():
+    """Возвращает клавиатуру с одной кнопкой 'Главное меню'."""
     return types.InlineKeyboardMarkup().add(
         types.InlineKeyboardButton("🔙 Главное меню", callback_data="cmd_main_menu")
     )
 
 
+def create_inline_markup_with_back(buttons, back_callback_data="cmd_main_menu"):
+    """Создает InlineKeyboardMarkup с кнопкой 'Назад'."""
+    markup = types.InlineKeyboardMarkup()
+    # Добавление основных кнопок
+    if buttons:
+        # Предполагаем, что buttons может быть списком кнопок или списком списков кнопок (для строк)
+        if isinstance(buttons[0], list):
+            for row in buttons:
+                markup.row(*row)
+        else:
+            markup.add(*buttons)
+
+    # Добавление кнопки "Назад"
+    markup.add(types.InlineKeyboardButton("🔙 Назад", callback_data=back_callback_data))
+    return markup
+
+
+# -------------------------
+# ОСНОВНЫЕ КОМАНДЫ (ОБНОВЛЕНО)
+# -------------------------
+
+
 @bot.message_handler(commands=["start"])
+@anti_flood
 def cmd_start(message):
-    bot.send_message(
-        message.chat.id, "Добро пожаловать! Меню:", reply_markup=main_menu()
+    uid = message.chat.id
+    user_name = message.from_user.first_name or "Гость"
+
+    # НОВОЕ ПРИВЕТСТВЕННОЕ СООБЩЕНИЕ
+    welcome_text = (
+        f"🎄 Привет, {user_name}! 🎁\n"
+        "Добро пожаловать к Гринчу!\n"
+        "💰 Оплата — Global24 (P2P)\n"
+        "После оплаты нужно отправить txID\n"
+        "Выберите действие в меню ниже:"
+    )
+
+    bot.send_message(uid, welcome_text, reply_markup=main_menu())
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "cmd_main_menu")
+@anti_flood
+def cmd_main_menu_callback(call):
+    # Хендлер для возврата в главное меню из inline
+    bot.answer_callback_query(call.id, "Главное меню")
+    bot.edit_message_text(
+        "Вы в главном меню. Выберите действие:",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=back_to_main_menu_inline(),  # Используем inline-меню для возврата
     )
 
 
 @bot.message_handler(func=lambda m: m.text == "🛒 Купить")
+@anti_flood
 def handle_buy_button(message):
     uid = message.chat.id
 
-    # 1. Получаем список магазинов из БД
     stores = get_all_stores()
     if not stores:
         return bot.send_message(uid, "❌ Каталог магазинов пуст.")
 
-    # 2. Формируем кнопки
-    markup = types.InlineKeyboardMarkup()
-    for store in stores:
-        markup.add(
-            types.InlineKeyboardButton(
-                store["title"], callback_data=f"store_{store['store_id']}"
-            )
+    # ДОБАВЛЕНИЕ ШУТКИ
+    joke = random.choice(grinch_jokes)
+
+    markup_buttons = [
+        types.InlineKeyboardButton(
+            store["title"], callback_data=f"store_{store['store_id']}"
         )
+        for store in stores
+    ]
 
-    bot.send_message(uid, "Выберите магазин:", reply_markup=markup)
+    # Кнопка "Назад" ведет в Главное меню
+    markup = create_inline_markup_with_back(
+        markup_buttons, back_callback_data="cmd_main_menu"
+    )
+
+    bot.send_message(
+        uid, f"{joke}\n\nВыберите магазин:", reply_markup=markup, parse_mode="Markdown"
+    )
 
 
 # -------------------------
-# ЭТАП 2: Выбор магазина
+# ЭТАПЫ ПОКУПКИ (ОБНОВЛЕНО ДЛЯ КНОПОК "НАЗАД")
 # -------------------------
+
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("store_"))
+@anti_flood
 def handle_store_selection(call):
-    bot.answer_callback_query(call.id, text="Загружаю товары...", show_alert=False)
     uid = call.from_user.id
+    store_id = call.data.split("_")[1]
 
-    try:
-        store_id = int(call.data.split("_")[1])
-    except:
-        return bot.send_message(uid, "Ошибка ID магазина.")
+    # Сохраняем store_id для кнопки "Назад" в следующем шаге
+    user_state[uid] = {"store_id": store_id}
 
-    # 1. Получаем товары из БД по store_id
     products = get_products_by_store(store_id)
 
     if not products:
         return bot.edit_message_text(
-            chat_id=uid,
-            message_id=call.message.message_id,
-            text="В этом магазине пока нет товаров.",
-            reply_markup=None,
+            "❌ Товары в этом магазине отсутствуют.",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=back_to_main_menu_inline(),
         )
 
-    # 2. Формируем кнопки с ценами
-    markup = types.InlineKeyboardMarkup()
-    text = "Выберите товар в этом магазине:"
-
-    for product in products:
-        button_text = f"{product['name']} ({product['price_usd']:.2f}$)"
-        markup.add(
-            types.InlineKeyboardButton(
-                button_text, callback_data=f"product_{product['product_id']}"
-            )
+    markup_buttons = [
+        types.InlineKeyboardButton(
+            product["name"], callback_data=f"product_{store_id}_{product['product_id']}"
         )
+        for product in products
+    ]
 
-    # 3. Редактируем сообщение для выбора товара
-    bot.edit_message_text(
-        chat_id=uid, message_id=call.message.message_id, text=text, reply_markup=markup
+    # Кнопка "Назад" ведет к списку магазинов (cmd_buy_callback)
+    markup = create_inline_markup_with_back(
+        markup_buttons, back_callback_data="cmd_buy_callback"
     )
 
-
-# -------------------------
-# ЭТАП 3: Выбор товара
-# -------------------------
-@bot.callback_query_handler(func=lambda call: call.data.startswith("product_"))
-def handle_product_selection(call):
-    bot.answer_callback_query(call.id, text="Загружаю адреса...", show_alert=False)
-    uid = call.from_user.id
-
-    try:
-        product_id = int(call.data.split("_")[1])
-    except:
-        return bot.send_message(uid, "Ошибка ID товара.")
-
-    # 1. Сохраняем product_id в состоянии
-    user_state[uid] = {"product_id": product_id}
-
-    # 2. Создаем Inline-кнопки для адресов
-    markup = types.InlineKeyboardMarkup()
-    for addr in ADDRESSES:
-        markup.add(
-            types.InlineKeyboardButton(addr, callback_data=f"addr_{product_id}_{addr}")
-        )
-
-    # 3. Редактируем сообщение
     bot.edit_message_text(
-        chat_id=uid,
-        message_id=call.message.message_id,
-        text="Отлично! Выберите место, где хотите забрать товар:",
+        "Выберите товар:",
+        call.message.chat.id,
+        call.message.message_id,
         reply_markup=markup,
     )
+    bot.answer_callback_query(call.id)
 
 
-# -------------------------
-# ЭТАП 4: Выбор адреса и создание инвойса
-# -------------------------
-@bot.callback_query_handler(func=lambda call: call.data.startswith("addr_"))
-def handle_address_selection(call):
-    bot.answer_callback_query(call.id, text="⏳ Создаю инвойс...", show_alert=False)
+@bot.callback_query_handler(func=lambda call: call.data == "cmd_buy_callback")
+@anti_flood
+def handle_back_to_buy(call):
+    # Повторяем логику handle_buy_button для возврата к магазинам
     uid = call.from_user.id
+    stores = get_all_stores()
 
-    # 1. Извлекаем данные (product_id и адрес)
-    try:
-        _, product_id_str, address = call.data.split("_", 2)
-        product_id = int(product_id_str)
-    except ValueError:
-        return bot.send_message(uid, "Ошибка при обработке адреса.")
-
-    # 2. ПОЛУЧЕНИЕ ДЕТАЛЕЙ ТОВАРА ИЗ БД
-    details = get_product_details_by_id(product_id)
-    if not details:
-        return bot.send_message(uid, "Ошибка: Товар не найден в каталоге.")
-
-    price = details["price_usd"]
-    product_name = details["product_name"]
-    shop_title = details["shop_title"]
-
-    # 3. Создаем заказ в БД
-    order_id = add_order(uid, product_id, price)
-
-    # 4. Создаем инвойс OxaPay
-    resp = create_invoice(uid, price, order_id)
-
-    if not resp or len(resp) != 2:
-        update_order(order_id, status="error")
-        return bot.send_message(
-            uid,
-            "❌ Ошибка создания платежа. Попробуйте снова.",
-            reply_markup=main_menu(),
+    markup_buttons = [
+        types.InlineKeyboardButton(
+            store["title"], callback_data=f"store_{store['store_id']}"
         )
-
-    pay_url, track_id = resp
-
-    # 5. Дополняем заказ деталями в БД
-    update_order(
-        order_id,
-        pickup_address=address,
-        status="waiting_payment",
-        payment_url=pay_url,
-        oxapay_track_id=track_id,
+        for store in stores
+    ]
+    markup = create_inline_markup_with_back(
+        markup_buttons, back_callback_data="cmd_main_menu"
     )
 
-    # 6. Отправляем сообщение с кнопкой оплаты
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("💳 Оплатить", url=pay_url))
+    joke = random.choice(grinch_jokes)
 
     bot.edit_message_text(
-        chat_id=uid,
-        message_id=call.message.message_id,
-        text=(
-            f"✅ **Заказ `{order_id}` создан!**\n\n"
-            f"Магазин: {shop_title}\n"
-            f"Товар: {product_name}\n"
-            f"Адрес получения: *{address}*\n"
-            f"Цена: **{price:.2f}$**\n\n"
-            "Нажмите кнопку для оплаты. **Фото с местом выдачи придет автоматически после подтверждения оплаты!**"
-        ),
+        f"{joke}\n\nВыберите магазин:",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup,
         parse_mode="Markdown",
-        reply_markup=markup,
     )
-    # 7. Очищаем состояние
-    user_state.pop(uid, None)
+    bot.answer_callback_query(call.id)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("product_"))
+@anti_flood
+def handle_product_selection(call):
+    uid = call.from_user.id
+    try:
+        _, store_id, product_id = call.data.split("_")
+        product_details = get_product_details_by_id(
+            int(product_id)
+        )  # Получаем детали для следующего шага
+    except (IndexError, ValueError):
+        return bot.send_message(uid, "❌ Ошибка ID товара.")
+
+    if not product_details:
+        return bot.send_message(uid, "❌ Товар не найден.")
+
+    user_state[uid] = {"current_product_details": product_details, "store_id": store_id}
+
+    # ... (код отображения цены и описания)
+
+    markup_buttons = [
+        types.InlineKeyboardButton(address, callback_data=f"addr_{product_id}_{i}")
+        for i, address in enumerate(ADDRESSES)
+    ]
+
+    # Кнопка "Назад" ведет обратно к списку товаров в этом магазине
+    markup = create_inline_markup_with_back(
+        markup_buttons, back_callback_data=f"store_{store_id}"
+    )
+
+    # ... (код отправки сообщения)
+    bot.edit_message_text(
+        f"**Выбран товар:** {product_details['name']}\nЦена: {product_details['price']:.2f} $\n\nВыберите адрес:",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup,
+        parse_mode="Markdown",
+    )
+    bot.answer_callback_query(call.id)
 
 
 # -------------------------
-# ЭТАП 6: Функция выдачи (give_product)
+# ЭТАП 4: Обработка выбора адреса (ПОДТВЕРЖДЕНИЕ С ФОТО)
 # -------------------------
-def give_product(user_id, order_id):
-    """Отправляет пользователю фотографию тайника и текст."""
-    od = get_order(order_id)
-    if not od or od.get("delivery_status") == "delivered":
-        return True
 
-    # 1. Получаем данные тайника из таблицы PRODUCTS
-    query = "SELECT file_path, delivery_text FROM products WHERE product_id = %s;"
-    product_info = execute_query(query, (od["product_id"],), fetch=True)
 
-    if not product_info:
-        bot.send_message(
-            user_id, "❌ Произошла ошибка. Информация о тайнике не найдена."
+@bot.callback_query_handler(func=lambda call: call.data.startswith("addr_"))
+@anti_flood
+def handle_address_selection(call):
+    uid = call.from_user.id
+
+    # 1. ПРОВЕРКА ЛИМИТА
+    orders = find_orders_by_user(uid)
+    unpaid_count = 0
+    now = datetime.now()
+
+    if orders:
+        for order_id, data in orders.items():
+            if data.get("status") == "waiting_payment":
+                expiry_timestamp = data.get("reservation_expires_at", 0)
+                expiry_dt = datetime.fromtimestamp(expiry_timestamp)
+                if expiry_dt > now:
+                    unpaid_count += 1
+
+    if unpaid_count >= MAX_UNPAID_ORDERS:
+        bot.answer_callback_query(
+            call.id,
+            f"Лимит! У вас уже {MAX_UNPAID_ORDERS} неоплаченных заказов.",
+            show_alert=True,
         )
-        return False
+        # Отправляем отдельное сообщение, т.к. inline-меню нельзя обновить
+        bot.send_message(
+            uid,
+            f"❌ **Лимит неоплаченных заказов ({MAX_UNPAID_ORDERS}) достигнут.**\n\n",
+            parse_mode="Markdown",
+            reply_markup=back_to_main_menu_inline(),
+        )
+        return
 
-    file_path, delivery_text = product_info[0]
+    # 2. ПОЛУЧЕНИЕ ДАННЫХ
+    try:
+        _, product_id, address_index = call.data.split("_")
+        product_id = int(product_id)
+        address_index = int(address_index)
+        selected_address = ADDRESSES[address_index]
+    except (IndexError, ValueError):
+        return bot.send_message(uid, "❌ Ошибка выбора товара/адреса.")
+
+    product_details = get_product_details_by_id(product_id)
+    if not product_details:
+        return bot.send_message(uid, "❌ Ошибка: товар не найден.")
+
+    price = product_details["price"]
+    product_name = product_details["name"]
+    file_path = product_details.get(
+        "file_path", "placeholder.jpg"
+    )  # Убедитесь, что файл существует
+    product_description = product_details.get(
+        "description", "Описание не предоставлено."
+    )
+
+    # 3. БРОНИРОВАНИЕ И СОЗДАНИЕ ИНВОЙСА
+    reservation_expires_at = datetime.now() + timedelta(hours=INITIAL_RESERVATION_HOURS)
+
+    # --- ВРЕМЕННЫЙ КОД ДЛЯ OXAPAY: заменяем на реальный вызов ---
+    # invoice = create_invoice(price, product_name)
+    # payment_url = invoice['url']
+    payment_url = "https://oxapay.io/pay"
+    # --- КОНЕЦ ВРЕМЕННОГО КОДА ---
+
+    new_order_data = {
+        "product_id": product_id,
+        "product_name": product_name,
+        "price": price,
+        "address": selected_address,
+        "status": "waiting_payment",
+        "payment_url": payment_url,
+        "reservation_expires_at": reservation_expires_at.timestamp(),
+        "is_reserved": True,
+    }
+
+    order_id = add_order(uid, new_order_data)
+
+    # 4. ОТПРАВКА ПОДТВЕРЖДЕНИЯ С ФОТОГРАФИЕЙ
+    caption_text = (
+        f"✅ **Подтверждение заказа №{order_id}**\n\n"
+        f"**Товар:** {product_name}\n"
+        f"**Адрес:** {selected_address}\n"
+        f"**Цена:** {price:.2f} $\n"
+        f"**Бронь до:** {reservation_expires_at.strftime('%Y-%m-%d %H:%M:%S')} (UTC)\n\n"
+        f"**Описание:**\n{product_description}"
+    )
 
     try:
-        # 2. Отправляем фото и текст тайника
+        with open(file_path, "rb") as f:
+            bot.send_photo(uid, f, caption=caption_text, parse_mode="Markdown")
+    except FileNotFoundError:
         bot.send_message(
-            user_id,
-            "✅ **Оплата получена!** Вот ваше место выдачи:",
+            uid,
+            caption_text + "\n\n❌ **ВНИМАНИЕ:** Фотография товара не найдена.",
             parse_mode="Markdown",
         )
 
-        with open(file_path, "rb") as f:
-            bot.send_photo(
-                user_id,
-                f,
-                caption=f"**Ваш тайник:**\n\n{delivery_text}",
-                parse_mode="Markdown",
-            )
+    # 5. ОТПРАВКА КНОПКИ ОПЛАТЫ
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("💳 Оплатить", url=payment_url))
 
-        # 3. Обновляем статус
-        update_order(order_id, delivery_status="delivered")
-        return True
-    except Exception as e:
-        print(f"Error giving product for order {order_id}: {e}")
-        return False
+    # Кнопка назад должна вести к списку адресов (обратно к выбору продукта)
+    markup.add(
+        types.InlineKeyboardButton(
+            "🔙 Назад (Выбрать другой адрес)", callback_data=f"product_{product_id}"
+        )
+    )
 
+    bot.send_message(
+        uid,
+        "**Для завершения** перейдите по ссылке ниже.\n"
+        "Не забудьте отправить **TxID** после оплаты!",
+        parse_mode="Markdown",
+        reply_markup=markup,
+    )
 
-# -------------------------
-# Хендлер "Мои заказы" (добавлен для полноты)
-# -------------------------
+    # Удаляем сообщение с выбором адреса
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass  # Игнорируем ошибку удаления
 
-
-@bot.message_handler(func=lambda m: m.text == "📦 Мои заказы")
-def handle_my_orders(message):
-    uid = message.chat.id
-    orders = find_orders_by_user(uid)
-
-    if not orders:
-        return bot.send_message(uid, "У вас пока нет активных заказов.")
-
-    text = "История ваших заказов:\n"
-    for order_id, data in orders.items():
-        # Преобразуем статус из БД в читаемый вид
-        status_display = {
-            "pending": "⏳ Ожидает оплаты",
-            "waiting_payment": "⏳ Ожидает оплаты",
-            "paid": "✅ Оплачен",
-            "delivered": "📦 Выдан",
-            "error": "❌ Ошибка",
-        }.get(data["status"], data["status"])
-
-        text += (
-            f"\n`{order_id}`\n"
-            f"  Товар: {data['product_name']}\n"
-            f"  Цена: {data['price']:.2f}$\n"
-            f"  Статус: **{status_display}**"
-        )   
-
-    bot.send_message(uid, text, parse_mode="Markdown")
+    bot.answer_callback_query(call.id, "Заказ создан.")
