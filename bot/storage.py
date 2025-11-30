@@ -1,8 +1,31 @@
 # bot/storage.py
 from .db import execute_query
-import time
 
-# --- МАГАЗИНЫ И ТОВАРЫ ---
+# ==========================================
+#              ПОЛЬЗОВАТЕЛИ
+# ==========================================
+
+
+def upsert_user(user_id, username, first_name):
+    """Сохраняет пользователя или обновляет его данные (для рассылки)."""
+    query = """
+    INSERT INTO users (user_id, username, first_name)
+    VALUES (%s, %s, %s)
+    ON CONFLICT (user_id) DO UPDATE 
+    SET username = EXCLUDED.username, first_name = EXCLUDED.first_name;
+    """
+    execute_query(query, (user_id, username, first_name))
+
+
+def get_all_users():
+    """Возвращает список ID всех пользователей."""
+    res = execute_query("SELECT user_id FROM users;", fetch=True)
+    return [row[0] for row in res] if res else []
+
+
+# ==========================================
+#           МАГАЗИНЫ И ТОВАРЫ
+# ==========================================
 
 
 def get_all_stores():
@@ -16,6 +39,10 @@ def get_all_stores():
 
 
 def get_products_by_store(store_id):
+    """
+    Возвращает товары магазина.
+    ВАЖНО: Добавлено условие is_sold = FALSE, чтобы скрывать проданные.
+    """
     query = """
     SELECT product_id, name, price_usd 
     FROM products 
@@ -32,12 +59,6 @@ def get_products_by_store(store_id):
     return products_list
 
 
-def mark_product_as_sold(product_id):
-    """Помечает товар как проданный, чтобы скрыть с витрины."""
-    query = "UPDATE products SET is_sold = TRUE WHERE product_id = %s;"
-    execute_query(query, (product_id,))
-
-
 def get_product_details_by_id(product_id):
     query = """
     SELECT p.price_usd, p.file_path, p.delivery_text, p.name, s.title 
@@ -50,7 +71,7 @@ def get_product_details_by_id(product_id):
         row = result[0]
         return {
             "price_usd": float(row[0]),
-            "file_path": row[1],  # Здесь теперь хранится file_id
+            "file_path": row[1],
             "delivery_text": row[2],
             "product_name": row[3],
             "shop_title": row[4],
@@ -58,7 +79,42 @@ def get_product_details_by_id(product_id):
     return None
 
 
-# --- ЗАКАЗЫ ---
+def mark_product_as_sold(product_id):
+    """Помечает товар как проданный (скрывает с витрины)."""
+    query = "UPDATE products SET is_sold = TRUE WHERE product_id = %s;"
+    execute_query(query, (product_id,))
+
+
+# ==========================================
+#           АДМИНКА (РЕДАКТИРОВАНИЕ)
+# ==========================================
+
+
+def insert_product(store_id, name, price, delivery_text, file_path):
+    query = """
+    INSERT INTO products (store_id, name, price_usd, delivery_text, file_path, is_sold)
+    VALUES (%s, %s, %s, %s, %s, FALSE);
+    """
+    execute_query(query, (store_id, name, price, delivery_text, file_path))
+
+
+def update_product_field(product_id, field, value):
+    """Обновляет одно поле товара."""
+    allowed_fields = ["name", "price_usd", "delivery_text", "file_path"]
+    if field not in allowed_fields:
+        return
+
+    query = f"UPDATE products SET {field} = %s WHERE product_id = %s;"
+    execute_query(query, (value, product_id))
+
+
+def delete_product(product_id):
+    execute_query("DELETE FROM products WHERE product_id = %s;", (product_id,))
+
+
+# ==========================================
+#                ЗАКАЗЫ
+# ==========================================
 
 
 def add_order(
@@ -109,17 +165,12 @@ def get_order(order_id):
     query = "SELECT * FROM orders WHERE order_id = %s;"
     result = execute_query(query, (order_id,), fetch=True)
     if result:
-        # Простая маппинг колонок (убедись, что порядок совпадает с CREATE TABLE)
-        # Лучше использовать DictCursor, но для совместимости оставим так:
-        # Порядок: order_id, user_id, product_id, pickup_address, price_usd, status, delivery_status...
-        # Упростим и вернем основные поля, которые нам нужны
-        # ВНИМАНИЕ: Если порядок столбцов в БД другой, тут может быть ошибка.
-        # Надежнее выбирать по именам, но для краткости:
+        # 0:order_id, 1:user_id, 2:product_id, ... 5:status, 6:delivery_status
         return {
             "order_id": result[0][0],
             "user_id": result[0][1],
             "product_id": result[0][2],
-            "delivery_status": result[0][6],  # Предполагаем 7-й столбец
+            "delivery_status": result[0][6],
             "status": result[0][5],
         }
     return None
@@ -145,18 +196,3 @@ def find_orders_by_user(user_id):
                 "delivery_status": d_status,
             }
     return orders_dict
-
-
-# --- АДМИНКА ---
-
-
-def insert_product(store_id, name, price, delivery_text, file_path):
-    query = """
-    INSERT INTO products (store_id, name, price_usd, delivery_text, file_path)
-    VALUES (%s, %s, %s, %s, %s);
-    """
-    execute_query(query, (store_id, name, price, delivery_text, file_path))
-
-
-def delete_product(product_id):
-    execute_query("DELETE FROM products WHERE product_id = %s;", (product_id,))
