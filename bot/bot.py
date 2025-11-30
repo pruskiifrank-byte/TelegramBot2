@@ -5,7 +5,7 @@ from telebot import types
 import time
 from datetime import datetime, timedelta
 import math
-import random  # <-- НОВЫЙ ИМПОРТ ДЛЯ ШУТОК
+import random
 from bot.config import TELEGRAM_TOKEN
 from bot.payment import create_invoice
 
@@ -25,9 +25,8 @@ FLOOD_LIMIT_SECONDS = 0.8
 flood_control = {}
 
 # Константы для Бронирования
-INITIAL_RESERVATION_HOURS = 4
-EXTENSION_HOURS = 6
-EXTENSION_FEE = 0.10
+INITIAL_RESERVATION_HOURS = 1  # <-- ИЗМЕНЕНО: Бронь на 1 час
+# УДАЛЕНЫ: EXTENSION_HOURS и EXTENSION_FEE
 
 # НОВАЯ КОНСТАНТА: Максимальное количество неоплаченных заказов
 MAX_UNPAID_ORDERS = 3
@@ -144,7 +143,7 @@ def cmd_main_menu_callback(call):
     bot.send_message(
         call.message.chat.id,
         "Вы в главном меню. Выберите действие:",
-        reply_markup=main_menu(),  # <--- ИСПРАВЛЕНО: Используем главную Reply-клавиатуру
+        reply_markup=main_menu(),
     )
 
     # 2. Удаляем старое Inline-сообщение, чтобы не захламлять чат
@@ -263,9 +262,7 @@ def handle_product_selection(call):
     uid = call.from_user.id
     try:
         _, store_id, product_id = call.data.split("_")
-        product_details = get_product_details_by_id(
-            int(product_id)
-        )  # Получаем детали для следующего шага
+        product_details = get_product_details_by_id(int(product_id))
     except (IndexError, ValueError):
         return bot.send_message(uid, "❌ Ошибка ID товара.")
 
@@ -274,7 +271,9 @@ def handle_product_selection(call):
 
     user_state[uid] = {"current_product_details": product_details, "store_id": store_id}
 
-    # ... (код отображения цены и описания)
+    # ИСПРАВЛЕНО: Используем .get() для безопасного извлечения ключей 'name' и 'price'
+    product_name = product_details.get("name", "Товар без названия")
+    price = product_details.get("price", 0.0)
 
     markup_buttons = [
         types.InlineKeyboardButton(address, callback_data=f"addr_{product_id}_{i}")
@@ -286,9 +285,9 @@ def handle_product_selection(call):
         markup_buttons, back_callback_data=f"store_{store_id}"
     )
 
-    # ... (код отправки сообщения)
+    # Обновлена строка 317 для использования переменных product_name и price
     bot.edit_message_text(
-        f"**Выбран товар:** {product_details['name']}\nЦена: {product_details['price']:.2f} $\n\nВыберите адрес:",
+        f"**Выбран товар:** {product_name}\nЦена: {price:.2f} $\n\nВыберите адрес:",
         call.message.chat.id,
         call.message.message_id,
         reply_markup=markup,
@@ -348,16 +347,17 @@ def handle_address_selection(call):
     if not product_details:
         return bot.send_message(uid, "❌ Ошибка: товар не найден.")
 
-    price = product_details["price"]
-    product_name = product_details["name"]
-    file_path = product_details.get(
-        "file_path", "placeholder.jpg"
-    )  # Убедитесь, что файл существует
+    # ИСПРАВЛЕНО: Используем .get() для безопасного извлечения ключей 'price' и 'name'
+    price = product_details.get("price", 0.0)
+    product_name = product_details.get("name", "Товар без названия")
+
+    file_path = product_details.get("file_path", "placeholder.jpg")
     product_description = product_details.get(
         "description", "Описание не предоставлено."
     )
 
     # 3. БРОНИРОВАНИЕ И СОЗДАНИЕ ИНВОЙСА
+    # ИСПОЛЬЗУЕТСЯ НОВОЕ ЗНАЧЕНИЕ INITIAL_RESERVATION_HOURS = 1
     reservation_expires_at = datetime.now() + timedelta(hours=INITIAL_RESERVATION_HOURS)
 
     # --- ВРЕМЕННЫЙ КОД ДЛЯ OXAPAY: заменяем на реальный вызов ---
