@@ -15,41 +15,35 @@ OXAPAY_HISTORY_URL = "https://api.oxapay.com/v1/payment"
 
 def create_invoice(user_id, amount_usd, order_id):
     """
-    Создание ссылки на оплату через OxaPay V1 (по вашему примеру).
+    Создание ссылки на оплату (Исправленная проверка успеха).
     """
-
-    # 1. Заголовки (Ключ передаем здесь!)
     headers = {"merchant_api_key": OXAPAY_API_KEY, "Content-Type": "application/json"}
 
-    # 2. Данные (Обратите внимание на названия полей snake_case)
     data = {
         "amount": amount_usd,
         "currency": "USD",
-        "lifetime": 60,  # Время жизни в минутах
-        "fee_paid_by_payer": 1,  # Комиссию платит покупатель
-        "under_paid_coverage": 5,  # Допускаем недоплату 5%
-        "to_currency": "USDT",  # Конвертация в USDT
+        "lifetime": 60,
+        "fee_paid_by_payer": 1,
+        "under_paid_coverage": 5,
+        "to_currency": "USDT",
         "auto_withdrawal": False,
-        "mixed_payment": True,  # Можно платить частями
-        # Важные ссылки
-        "callback_url": f"{BASE_URL}/oxapay/ipn",  # Куда стучится сервер
-        "return_url": "https://t.me/MrGrinchShopZp_Bot",  # Куда вернуть юзера
+        "mixed_payment": True,
+        "callback_url": f"{BASE_URL}/oxapay/ipn",
+        "return_url": "https://t.me/MrGrinchShopZp_Bot",
         "description": f"Order {order_id}",
         "order_id": str(order_id),
-        "sandbox": False,  # Выключаем песочницу для реальных денег
+        "sandbox": False,
     }
 
     try:
-        # Отправляем POST запрос
         response = requests.post(
             OXAPAY_CREATE_URL, data=json.dumps(data), headers=headers, timeout=15
         )
         result = response.json()
 
-        # В V1 API успешный код "result": 100
-        # Также проверяем message на "success"
-        if result.get("result") == 100 or result.get("message") == "success":
-            # OxaPay V1 возвращает payLink и trackId внутри 'data'
+        # --- ИСПРАВЛЕНИЕ ТУТ ---
+        # Проверяем успешность (status 200 - это успех для V1, result 100 - для Legacy)
+        if result.get("status") == 200 or result.get("result") == 100:
             payment_data = result.get("data", {})
             return payment_data.get("payLink"), payment_data.get("trackId")
         else:

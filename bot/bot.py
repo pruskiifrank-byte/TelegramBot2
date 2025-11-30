@@ -72,7 +72,12 @@ def cmd_start(message):
 
 @bot.callback_query_handler(func=lambda c: c.data == "cmd_main_menu")
 def back_to_main(call):
-    bot.delete_message(call.message.chat.id, call.message.message_id)
+    # Пытаемся удалить сообщение, но если не выйдет — игнорируем ошибку
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass  # Сообщение уже удалено, ничего страшного
+
     bot.send_message(call.message.chat.id, "Главное меню:", reply_markup=main_menu())
 
 
