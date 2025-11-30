@@ -1,1 +1,1 @@
-web: gunicorn server:app --preload
+web: gunicorn server:app --workers 2 --threads 4 --worker-class gthread --preload
