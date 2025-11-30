@@ -51,7 +51,17 @@ def anti_flood(func):
     """Декоратор для ограничения частоты сообщений от пользователя."""
 
     def wrapper(message):
-        uid = message.chat.id
+        # ОПРЕДЕЛЯЕМ ТИП ОБЪЕКТА И ПОЛУЧАЕМ UID
+        if isinstance(message, telebot.types.CallbackQuery):
+            # Для CallbackQuery используем ID пользователя, а не ID чата сообщения
+            uid = message.from_user.id
+        elif isinstance(message, telebot.types.Message):
+            # Для Message используем ID чата
+            uid = message.chat.id
+        else:
+            # Если тип неизвестен, просто пропускаем
+            return func(message)
+
         current_time = time.time()
         last_time = flood_control.get(uid, 0)
 
@@ -128,12 +138,20 @@ def cmd_start(message):
 def cmd_main_menu_callback(call):
     # Хендлер для возврата в главное меню из inline
     bot.answer_callback_query(call.id, "Главное меню")
-    bot.edit_message_text(
-        "Вы в главном меню. Выберите действие:",
+
+    # 1. Отправляем новое сообщение (или редактируем, если нужно)
+    # Используем send_message, чтобы вернуть Reply-клавиатуру
+    bot.send_message(
         call.message.chat.id,
-        call.message.message_id,
-        reply_markup=back_to_main_menu_inline(),  # Используем inline-меню для возврата
+        "Вы в главном меню. Выберите действие:",
+        reply_markup=main_menu(),  # <--- ИСПРАВЛЕНО: Используем главную Reply-клавиатуру
     )
+
+    # 2. Удаляем старое Inline-сообщение, чтобы не захламлять чат
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
 
 
 @bot.message_handler(func=lambda m: m.text == "🛒 Купить")
