@@ -5,8 +5,14 @@ import os
 import requests  # НУЖЕН ДЛЯ ПРОВЕРКИ API
 from bot.config import TELEGRAM_TOKEN, OXAPAY_API_KEY, ADMIN_IDS
 from bot.bot import bot
-from bot.storage import update_order, get_order, get_product_details_by_id
+from bot.storage import (
+    update_order,
+    get_order,
+    get_product_details_by_id,
+    mark_product_as_sold,
+)
 from bot.payment import handle_oxapay_callback
+
 
 app = Flask(__name__)
 
@@ -44,6 +50,7 @@ def give_product(user_id, order_id):
         # Отправляем фото по ID
         bot.send_photo(user_id, prod["file_path"], caption=text, parse_mode="HTML")
         update_order(order_id, delivery_status="delivered")
+        mark_product_as_sold(order["product_id"])  # УБИРАЕМ ТОВАР С ВИТРИНЫ
         return True
     except telebot.apihelper.ApiTelegramException as e:
         # Если бот в блоке, шлем админу

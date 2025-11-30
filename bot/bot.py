@@ -61,7 +61,8 @@ def cmd_start(message):
 
     bot.send_message(
         message.chat.id,
-        f"👋 Привет, {message.from_user.first_name}!\nДобро пожаловать в магазин!",
+        f"👋 Привет, {message.from_user.first_name}!\nДобро пожаловать в магазин!\n"
+        "🎁 Выбирай быстрее. (Или я заберу это себе!)",
         reply_markup=main_menu(),
     )
 
@@ -183,7 +184,7 @@ def handle_prod_selection(call):
         f"🧾 **Заказ №{real_oid}**\n\n"
         f"📦 Товар: **{details['product_name']}**\n"
         f"💰 К оплате: **{details['price_usd']} $**\n\n"
-        f"⚠️ _Фото и данные для получения вы получите автоматически после оплаты._"
+        f"⚠️ _Фото и данные для получения вы получите автоматически после оплаты или не получите_ 😈"
     )
 
     kb = types.InlineKeyboardMarkup()
@@ -473,7 +474,7 @@ def aadd_price(m):
 def aadd_desc(m):
     try:
         admin_state[m.from_user.id]["price"] = float(m.text.replace(",", "."))
-        msg = bot.send_message(m.chat.id, "Описание/Клад (будет выдано ПОСЛЕ оплаты):")
+        msg = bot.send_message(m.chat.id, "Описание (будет выдано ПОСЛЕ оплаты):")
         bot.register_next_step_handler(msg, aadd_photo)
     except:
         bot.send_message(m.chat.id, "Число!")
@@ -496,3 +497,90 @@ def aadd_fin(m):
         m.photo[-1].file_id,
     )
     bot.send_message(m.chat.id, "✅ Добавлено!")
+
+
+# --- 📦 МОИ ЗАКАЗЫ (ОБНОВЛЕНИЕ) ---
+
+
+@bot.message_handler(func=lambda m: m.text == "📦 Мои заказы")
+@anti_flood
+def my_orders(message):
+    uid = message.chat.id
+    # Получаем последние 10 заказов
+    orders = find_orders_by_user(uid)
+
+    if not orders:
+        return bot.send_message(uid, "📭 У вас пока нет заказов.")
+
+    kb = types.InlineKeyboardMarkup()
+    text = (
+        "📦 **Ваши последние покупки:**\n(Нажмите на товар, чтобы получить данные)\n\n"
+    )
+
+    count = 0
+    for order_id, data in orders.items():
+        if count >= 10:
+            break
+        count += 1
+
+        status_icon = "⏳"
+        status_text = "Ожидание"
+
+        # Если оплачено - ставим галочку
+        if data["status"] == "paid" or data["delivery_status"] == "delivered":
+            status_icon = "✅"
+            status_text = "Оплачено"
+
+            # Добавляем КНОПКУ только для оплаченных товаров
+            kb.add(
+                types.InlineKeyboardButton(
+                    f"{status_icon} {data['product_name']}",
+                    callback_data=f"myord_{order_id}",
+                )
+            )
+        else:
+            # Для неоплаченных просто показываем текст (или кнопку оплаты, если хотите)
+            text += f"{status_icon} {data['product_name']} — {data['price']}$\n"
+
+    if len(kb.keyboard) == 0:
+        text += "\n_У вас нет завершенных покупок._"
+
+    bot.send_message(uid, text, reply_markup=kb, parse_mode="Markdown")
+
+
+# Хендлер для нажатия на кнопку заказа в списке
+@bot.callback_query_handler(func=lambda c: c.data.startswith("myord_"))
+def get_purchased_product(call):
+    uid = call.from_user.id
+    order_id = call.data.split("_")[1]
+
+    # 1. Ищем заказ
+    order = get_order(order_id)  # Эта функция из storage.py
+
+    if not order:
+        return bot.answer_callback_query(call.id, "Заказ не найден.")
+
+    # 2. Проверяем, реально ли он оплачен
+    if order["status"] != "paid" and order["delivery_status"] != "delivered":
+        return bot.answer_callback_query(
+            call.id, "Этот заказ еще не оплачен!", show_alert=True
+        )
+
+    # 3. Достаем детали товара
+    details = get_product_details_by_id(order["product_id"])
+    if not details:
+        return bot.answer_callback_query(call.id, "Товар был удален из базы.")
+
+    # 4. Отправляем данные снова
+    text = (
+        f"✅ **Заказ:** {order_id}\n"
+        f"📦 **Товар:** {details['product_name']}\n\n"
+        f"📍 **ВАШИ ДАННЫЕ:**\n{details['delivery_text']}"
+    )
+
+    try:
+        # Отправляем фото по ID
+        bot.send_photo(uid, details["file_path"], caption=text, parse_mode="Markdown")
+        bot.answer_callback_query(call.id, "Данные отправлены!")
+    except Exception as e:
+        bot.send_message(uid, text + "\n\n(Фото недоступно)", parse_mode="Markdown")

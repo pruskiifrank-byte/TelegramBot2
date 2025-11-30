@@ -16,7 +16,12 @@ def get_all_stores():
 
 
 def get_products_by_store(store_id):
-    query = "SELECT product_id, name, price_usd FROM products WHERE store_id = %s ORDER BY price_usd;"
+    query = """
+    SELECT product_id, name, price_usd 
+    FROM products 
+    WHERE store_id = %s AND is_sold = FALSE 
+    ORDER BY price_usd;
+    """
     results = execute_query(query, (store_id,), fetch=True)
     products_list = []
     if results:
@@ -25,6 +30,12 @@ def get_products_by_store(store_id):
                 {"product_id": row[0], "name": row[1], "price_usd": float(row[2])}
             )
     return products_list
+
+
+def mark_product_as_sold(product_id):
+    """Помечает товар как проданный, чтобы скрыть с витрины."""
+    query = "UPDATE products SET is_sold = TRUE WHERE product_id = %s;"
+    execute_query(query, (product_id,))
 
 
 def get_product_details_by_id(product_id):
