@@ -1,7 +1,5 @@
 # server.py
-
 import os
-import json
 from flask import Flask, request, abort
 import telebot
 from bot.config import TELEGRAM_TOKEN

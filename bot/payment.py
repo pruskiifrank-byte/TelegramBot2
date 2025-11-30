@@ -12,7 +12,7 @@ OXAPAY_INVOICE_URL = "https://api.oxapay.com/v1/payment/invoice"
 def create_invoice(user_id, amount_usd, file_path):
     """
     Создание инвойса OxaPay v1
-    """
+    """ 
     order_id = f"ORD-{int(time.time())}"
 
     headers = {"merchant_api_key": OXAPAY_API_KEY, "Content-Type": "application/json"}

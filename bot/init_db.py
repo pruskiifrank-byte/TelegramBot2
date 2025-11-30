@@ -1,21 +1,83 @@
 # init_db.py
 from bot.db import execute_query
-from bot.bot import SHOPS # Импортируем каталог из bot.py
+
+# Используем полный каталог для инициализации БД
+CATALOG = {
+    "fruits": {
+        "title": "🍌 Scooby-Doo — Фрукты",
+        "products": [
+            {
+                "name": "Набор фруктов (Малый)",
+                "file": "bot/images/fruits_s.jpg",
+                "price": 1.00,
+                "delivery_text": "📍 Тайник у фонтана, смотри под скамейкой. Код: FRUITS1.",
+            },
+            {
+                "name": "Набор фруктов (Средний)",
+                "file": "bot/images/fruits_m.jpg",
+                "price": 2.00,
+                "delivery_text": "📍 У большого дерева, под камнем. Код: FRUITS2.",
+            },
+        ],
+    },
+    "vegetables": {
+        "title": "🥕 MrGrinchShopZp — Овощи",
+        "products": [
+            {
+                "name": "Набор овощей (Зима)",
+                "file": "bot/images/vegs_w.jpg",
+                "price": 1.00,
+                "delivery_text": "📍 Тайник у столба, синий мешок. Код: VEGS2.",
+            },
+            {
+                "name": "Набор овощей (Лето)",
+                "file": "bot/images/vegs_s.jpg",
+                "price": 2.00,
+                "delivery_text": "📍 На крыше парковки, в вентиляции. Код: VEGS3.",
+            },
+        ],
+    },
+    "meat": {
+        "title": "🥩 BeefMaster — Мясо",
+        "products": [
+            {
+                "name": "Стейк Премиум",
+                "file": "bot/images/meat.jpg",
+                "price": 12.00,
+                "delivery_text": "📍 Под старым дубом, в синем контейнере. Код: MEAT3.",
+            },
+        ],
+    },
+}
+
 
 def create_tables():
-    """Создает таблицы products и orders в БД."""
+    """Создает таблицы stores, products и orders в БД."""
+    print("--- Удаление старых таблиц (если существуют)...")
+    execute_query("DROP TABLE IF EXISTS orders;")
+    execute_query("DROP TABLE IF EXISTS products;")
+    execute_query("DROP TABLE IF EXISTS stores;")
+
+    print("--- Создание таблицы stores...")
+    stores_table = """
+    CREATE TABLE IF NOT EXISTS stores (
+        store_id SERIAL PRIMARY KEY,
+        shop_key TEXT UNIQUE NOT NULL,
+        title TEXT NOT NULL
+    );
+    """
+    execute_query(stores_table)
+    print("stores создана.")
+
     print("--- Создание таблицы products...")
     products_table = """
     CREATE TABLE IF NOT EXISTS products (
         product_id SERIAL PRIMARY KEY,
-        shop_key TEXT NOT NULL,
-        title TEXT NOT NULL,
+        store_id INTEGER REFERENCES stores(store_id), 
         name TEXT NOT NULL,
         price_usd NUMERIC(10, 2) NOT NULL,
         delivery_text TEXT NOT NULL,
-        file_path TEXT NOT NULL,
-        is_active BOOLEAN DEFAULT TRUE,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        file_path TEXT NOT NULL
     );
     """
     execute_query(products_table)
@@ -27,7 +89,7 @@ def create_tables():
         order_id TEXT PRIMARY KEY,
         user_id BIGINT NOT NULL,
         product_id INTEGER REFERENCES products(product_id),
-        pickup_address TEXT NOT NULL,
+        pickup_address TEXT, 
         price_usd NUMERIC(10, 2) NOT NULL,
         status TEXT NOT NULL DEFAULT 'pending', 
         delivery_status TEXT DEFAULT 'pending',
@@ -40,34 +102,40 @@ def create_tables():
     execute_query(orders_table)
     print("orders создана.")
 
+
 def populate_products():
-    """Заполняет таблицу products данными из каталога SHOPS."""
+    """Заполняет таблицы stores и products данными из каталога."""
     print("--- Заполнение каталога...")
-    for key, data in SHOPS.items():
-        # Проверяем, существует ли уже этот товар по shop_key
-        check_query = "SELECT product_id FROM products WHERE shop_key = %s;"
-        existing = execute_query(check_query, (key,), fetch=True)
-        
-        if not existing:
-            product = data["product"]
-            insert_query = """
-            INSERT INTO products (shop_key, title, name, price_usd, delivery_text, file_path)
-            VALUES (%s, %s, %s, %s, %s, %s);
-            """
-            params = (
-                key,
-                data["title"],
-                product["name"],
-                product["price"],
-                product["delivery_text"],
-                product["file"],
-            )
-            execute_query(insert_query, params)
-            print(f"Добавлен товар: {data['title']}")
-        else:
-            print(f"Товар {data['title']} уже существует.")
+
+    # Заполнение stores
+    for key, data in CATALOG.items():
+        insert_store = (
+            "INSERT INTO stores (shop_key, title) VALUES (%s, %s) RETURNING store_id;"
+        )
+        result = execute_query(insert_store, (key, data["title"]), fetch=True)
+        store_id = result[0][0] if result else None
+
+        if store_id:
+            # Заполнение products
+            for product in data["products"]:
+                insert_product = """
+                INSERT INTO products (store_id, name, price_usd, delivery_text, file_path)
+                VALUES (%s, %s, %s, %s, %s);
+                """
+                params = (
+                    store_id,
+                    product["name"],
+                    product["price"],
+                    product["delivery_text"],
+                    product["file"],
+                )
+                execute_query(insert_product, params)
+                print(f"Добавлен товар: {product['name']} (Магазин ID: {store_id})")
+
 
 if __name__ == "__main__":
+    from bot.db import execute_query  # повторный импорт на всякий случай
+
     create_tables()
     populate_products()
     print("База данных инициализирована.")
