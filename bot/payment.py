@@ -28,7 +28,7 @@ def create_invoice(user_id, amount_usd, order_id):
         "auto_withdrawal": False,
         "mixed_payment": True,
         "callback_url": f"{BASE_URL}/oxapay/ipn",
-        "return_url": "https://t.me/Elk_ShopBot",  # Замените на юзернейм своего бота
+        "return_url": "https://t.me/MrGrinchShopZp_Bot",  # Замените на юзернейм своего бота
         "email": "",
         "order_id": order_id,
         "thanks_message": "Спасибо за оплату!",
