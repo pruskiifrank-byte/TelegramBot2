@@ -4,96 +4,20 @@ import telebot
 from telebot import types
 import time
 from datetime import datetime, timedelta
-import random
 import math
-import os  # Для работы с файловой системой при сохранении и удалении фото
+import random  # <-- НОВЫЙ ИМПОРТ ДЛЯ ШУТОК
+from bot.config import TELEGRAM_TOKEN
+from bot.payment import create_invoice
 
-# -------------------------------------------------------------
-# ЗАГЛУШКИ ДЛЯ ТЕСТИРОВАНИЯ (Замените на ваши реальные импорты и функции)
-# -------------------------------------------------------------
-TELEGRAM_TOKEN = "8211248581:AAHxBU1kzqiSQrNZMRzpFRoOaEfCA9ecclg"
-ADMIN_IDS = [7145757897]  # <-- ЗАМЕНИТЕ НА ВАШИ РЕАЛЬНЫЕ TELEGRAM ID
-
-
-def update_order(*args, **kwargs):
-    pass
-
-
-def find_orders_by_user(uid):
-    return {
-        101: {
-            "status": "waiting_payment",
-            "reservation_expires_at": (
-                datetime.now() + timedelta(minutes=30)
-            ).timestamp(),
-            "price": 10,
-            "product_name": "Товар А",
-        },
-    }
-
-
-def get_order(order_id):
-    return {}
-
-
-def add_order(uid, data):
-    return 104
-
-
-def get_all_stores():
-    return [{"store_id": 1, "title": "Город А"}, {"store_id": 2, "title": "Город Б"}]
-
-
-def get_products_by_store(store_id):
-    if int(store_id) == 1:
-        return [
-            {"product_id": 10, "name": "Шишка (1г)", "price": 50},
-            {"product_id": 11, "name": "Лист (5г)", "price": 100},
-        ]
-    return []
-
-
-def get_product_details_by_id(product_id):
-    # Эта заглушка должна возвращать ПОЛНЫЕ детали, включая file_path!
-    if int(product_id) == 10:
-        return {
-            "product_id": 10,
-            "price": 50,
-            "name": "Шишка (1г)",
-            "description": "Лучшее качество, свежий завоз. Натуральный, чистый продукт.",
-            "file_path": "product_photos/example_10.jpg",  # ОБЯЗАТЕЛЬНО СУЩЕСТВУЮЩИЙ ПУТЬ
-        }
-    return {}
-
-
-def execute_query(query, params=None):
-    print(f"--- [DB EXEC] Executing: {query} with params: {params}")
-    return None
-
-
-# --- ЗАГЛУШКА ДЛЯ ВЫДАЧИ ТОВАРА (Используется в server.py) ---
-def give_product(user_id, order_id):
-    """
-    ВАЖНО: Эта функция должна быть реализована в вашем модуле доставки/логики,
-    но экспортируется здесь, чтобы избежать ошибки импорта в server.py.
-    """
-    print(f"[LOG] Giving product for Order ID: {order_id} to User ID: {user_id}")
-    # Здесь должна быть логика отправки адреса/фото
-    # bot.send_message(user_id, "Ваш товар: [АДРЕС]")
-    # update_order(order_id, delivery_status='delivered')
-    return True
-
-
-# -------------------------------------------------------------
+# Импорты ниже должны быть из bot/storage и bot/db
+from bot.storage import update_order, find_orders_by_user, get_order, add_order
+from bot.storage import get_all_stores, get_products_by_store, get_product_details_by_id
+from bot.db import execute_query
 
 # -------------------------
-# Константы и Состояние
+# Константы, состояние и Анти-Флуд
 # -------------------------
-ADDRESSES = [
-    "Бульвар Шевченко, Клад 1",
-    "Ул. Победы, Тайник 2",
-    "Проспект Мира, Локация 3",
-]
+ADDRESSES = ["Бульвар Шевченко", "Ул. Победы", "Проспект Мира"]
 user_state = {}
 
 # Константы для Анти-Флуда
@@ -101,9 +25,11 @@ FLOOD_LIMIT_SECONDS = 0.8
 flood_control = {}
 
 # Константы для Бронирования
-INITIAL_RESERVATION_HOURS = 1
+INITIAL_RESERVATION_HOURS = 4
+EXTENSION_HOURS = 6
+EXTENSION_FEE = 0.10
 
-# Максимальное количество неоплаченных заказов
+# НОВАЯ КОНСТАНТА: Максимальное количество неоплаченных заказов
 MAX_UNPAID_ORDERS = 3
 
 # ТЕМАТИЧЕСКИЕ ШУТКИ ГРИНЧА
@@ -114,31 +40,12 @@ grinch_jokes = [
     "👀 «Если что-то пойдёт не так — это не я!»",
 ]
 
-# СТЕЙТЫ АДМИН ПАНЕЛИ
-ADMIN_STATES = {
-    "A_START": 1,
-    "A_NAME": 2,
-    "A_PRICE": 3,
-    "A_DESC": 4,
-    "A_PHOTO": 5,
-    "A_STORE": 6,
-    "A_CONFIRM": 7,
-    # Новые стейты для изменения/удаления
-    "M_SELECT_STORE": 10,
-    "M_SELECT_PRODUCT": 11,
-    "M_SELECT_FIELD": 12,
-    "M_NEW_VALUE": 13,
-    "D_SELECT_STORE": 20,
-    "D_SELECT_PRODUCT": 21,
-    "D_CONFIRM": 22,
-}
-
 # Создаём бота
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="HTML", threaded=False)
 
 
 # -------------------------
-# АНТИ-ФЛУД ДЕКОРАТОР
+# АНТИ-ФЛУД ДЕКОРАТОР (ОСТАЕТСЯ БЕЗ ИЗМЕНЕНИЙ)
 # -------------------------
 def anti_flood(func):
     """Декоратор для ограничения частоты сообщений от пользователя."""
@@ -158,7 +65,7 @@ def anti_flood(func):
 
 
 # -------------------------
-# ХЕЛПЕРЫ ДЛЯ КЛАВИАТУР
+# ХЕЛПЕРЫ ДЛЯ КЛАВИАТУР (ОБНОВЛЕНО)
 # -------------------------
 
 
@@ -167,16 +74,6 @@ def main_menu():
     kb.add(types.KeyboardButton("🛒 Купить"))
     kb.add(types.KeyboardButton("📦 Мои заказы"))
     kb.add(types.KeyboardButton("📍 Показать адрес"))
-    return kb
-
-
-def admin_menu():
-    """Клавиатура для администратора."""
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(types.KeyboardButton("➕ Добавить товар"))
-    kb.add(types.KeyboardButton("✏️ Изменить товар"))
-    kb.add(types.KeyboardButton("🗑️ Удалить товар"))
-    kb.add(types.KeyboardButton("🚪 Выйти из Admin"))
     return kb
 
 
@@ -190,27 +87,22 @@ def back_to_main_menu_inline():
 def create_inline_markup_with_back(buttons, back_callback_data="cmd_main_menu"):
     """Создает InlineKeyboardMarkup с кнопкой 'Назад'."""
     markup = types.InlineKeyboardMarkup()
+    # Добавление основных кнопок
     if buttons:
+        # Предполагаем, что buttons может быть списком кнопок или списком списков кнопок (для строк)
         if isinstance(buttons[0], list):
             for row in buttons:
                 markup.row(*row)
         else:
-            # Разбиваем на ряды по 2 кнопки
-            row = []
-            for btn in buttons:
-                row.append(btn)
-                if len(row) == 2:
-                    markup.row(*row)
-                    row = []
-            if row:
-                markup.row(*row)
+            markup.add(*buttons)
 
+    # Добавление кнопки "Назад"
     markup.add(types.InlineKeyboardButton("🔙 Назад", callback_data=back_callback_data))
     return markup
 
 
 # -------------------------
-# ОБЩИЕ КОМАНДЫ (СТАРТ, МЕНЮ)
+# ОСНОВНЫЕ КОМАНДЫ (ОБНОВЛЕНО)
 # -------------------------
 
 
@@ -220,6 +112,7 @@ def cmd_start(message):
     uid = message.chat.id
     user_name = message.from_user.first_name or "Гость"
 
+    # НОВОЕ ПРИВЕТСТВЕННОЕ СООБЩЕНИЕ
     welcome_text = (
         f"🎄 Привет, {user_name}! 🎁\n"
         "Добро пожаловать к Гринчу!\n"
@@ -227,424 +120,89 @@ def cmd_start(message):
         "Выберите действие в меню ниже:"
     )
 
-    # При старте сбрасываем админ-режим на всякий случай
-    user_state[uid] = {}
-
     bot.send_message(uid, welcome_text, reply_markup=main_menu())
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "cmd_main_menu")
 @anti_flood
 def cmd_main_menu_callback(call):
+    # Хендлер для возврата в главное меню из inline
     bot.answer_callback_query(call.id, "Главное меню")
     bot.edit_message_text(
         "Вы в главном меню. Выберите действие:",
         call.message.chat.id,
         call.message.message_id,
-        reply_markup=None,  # Убираем inline, чтобы показать reply-клавиатуру
+        reply_markup=back_to_main_menu_inline(),  # Используем inline-меню для возврата
     )
-    # Отправляем новое сообщение с reply-клавиатурой
-    bot.send_message(
-        call.message.chat.id,
-        "Главное меню:",
-        reply_markup=main_menu(),
-    )
-
-
-# -------------------------
-# ХЕНДЛЕРЫ ГЛАВНОГО МЕНЮ (Заглушки)
-# -------------------------
 
 
 @bot.message_handler(func=lambda m: m.text == "🛒 Купить")
 @anti_flood
 def handle_buy_button(message):
     uid = message.chat.id
-    # Здесь должна быть логика выбора города/магазина
-    bot.send_message(
-        uid,
-        f"{random.choice(grinch_jokes)} **Начинаем покупки!** (Логика выбора магазина отсутствует)",
-        parse_mode="Markdown",
-        reply_markup=back_to_main_menu_inline(),
-    )
-
-
-@bot.message_handler(func=lambda m: m.text == "📦 Мои заказы")
-@anti_flood
-def handle_my_orders(message):
-    uid = message.chat.id
-    orders = find_orders_by_user(uid)
-    if orders:
-        text = "🔍 **Ваши заказы:**\n"
-        for order_id, data in orders.items():
-            text += f"OrderID: `{order_id}`. Товар: {data['product_name']}. Статус: **{data['status']}**\n"
-    else:
-        text = "У вас нет активных заказов."
-
-    bot.send_message(uid, text, parse_mode="Markdown", reply_markup=main_menu())
-
-
-@bot.message_handler(func=lambda m: m.text == "📍 Показать адрес")
-@anti_flood
-def handle_show_address_button(message):
-    uid = message.chat.id
-    # Этот функционал обычно реализован в хендлере, который вызывается после
-    # успешной оплаты и должен выдавать конкретный адрес.
-    # Здесь просто заглушка:
-    bot.send_message(
-        uid,
-        "🚫 **Функция показа адреса временно отключена.**\n\nДля получения адреса вам необходимо оплатить активный заказ.",
-        parse_mode="Markdown",
-        reply_markup=main_menu(),
-    )
-
-
-# -------------------------
-# АДМИН ПАНЕЛЬ: УПРАВЛЕНИЕ РЕЖИМАМИ
-# -------------------------
-
-
-@bot.message_handler(commands=["admin"])
-def cmd_admin(message):
-    uid = message.chat.id
-    if uid not in ADMIN_IDS:
-        return bot.send_message(uid, "🚫 Доступ запрещен.")
-
-    user_state[uid] = {"mode": "admin"}
-    bot.send_message(
-        uid,
-        "🔑 **Вы вошли в режим Администратора.**\n\nВыберите действие:",
-        reply_markup=admin_menu(),
-        parse_mode="Markdown",
-    )
-
-
-@bot.message_handler(func=lambda m: m.text == "🚪 Выйти из Admin")
-def handle_exit_admin(message):
-    uid = message.chat.id
-    # Проверяем, что пользователь действительно был в админ-режиме
-    if user_state.get(uid, {}).get("mode") == "admin":
-        user_state[uid] = {}
-        bot.send_message(
-            uid, "👋 Вы вышли из режима Администратора.", reply_markup=main_menu()
-        )
-    else:
-        # Если случайно нажал, но не был в режиме, просто возвращаем в главное меню
-        bot.send_message(
-            uid, "Вы не были в режиме Администратора.", reply_markup=main_menu()
-        )
-
-
-# -------------------------
-# АДМИН ПАНЕЛЬ: ДОБАВЛЕНИЕ ТОВАРА (логика сохранена)
-# -------------------------
-
-
-@bot.message_handler(func=lambda m: m.text == "➕ Добавить товар")
-def handle_add_product_start(message):
-    uid = message.chat.id
-    if uid not in ADMIN_IDS:
-        return
-
-    user_state[uid] = {
-        "mode": "admin",
-        "sub_mode": "add_product",
-        "step": ADMIN_STATES["A_NAME"],
-        "data": {},
-    }
-
-    bot.send_message(
-        uid,
-        "Начнем добавление товара. **Введите название товара** (например, Шишка 1г):",
-    )
-
-
-# Хендлер ввода имени
-@bot.message_handler(
-    func=lambda m: user_state.get(m.chat.id, {}).get("sub_mode") == "add_product"
-    and user_state.get(m.chat.id, {}).get("step") == ADMIN_STATES["A_NAME"]
-)
-def handle_add_product_name(message):
-    uid = message.chat.id
-    user_state[uid]["data"]["name"] = message.text
-    user_state[uid]["step"] = ADMIN_STATES["A_PRICE"]
-    bot.send_message(
-        uid, "Теперь **введите цену товара в долларах США** (например, 50.00):"
-    )
-
-
-# Хендлер ввода цены
-@bot.message_handler(
-    func=lambda m: user_state.get(m.chat.id, {}).get("sub_mode") == "add_product"
-    and user_state.get(m.chat.id, {}).get("step") == ADMIN_STATES["A_PRICE"]
-)
-def handle_add_product_price(message):
-    uid = message.chat.id
-    try:
-        price = float(message.text)
-        if price <= 0:
-            raise ValueError
-    except ValueError:
-        return bot.send_message(
-            uid, "❌ Некорректный формат цены. Введите число (например, 75.50):"
-        )
-
-    user_state[uid]["data"]["price"] = price
-    user_state[uid]["step"] = ADMIN_STATES["A_DESC"]
-    bot.send_message(
-        uid, "✅ Цена сохранена. Теперь **введите полное описание товара**:"
-    )
-
-
-# Хендлер ввода описания
-@bot.message_handler(
-    func=lambda m: user_state.get(m.chat.id, {}).get("sub_mode") == "add_product"
-    and user_state.get(m.chat.id, {}).get("step") == ADMIN_STATES["A_DESC"]
-)
-def handle_add_product_desc(message):
-    uid = message.chat.id
-    user_state[uid]["data"]["description"] = message.text
-    user_state[uid]["step"] = ADMIN_STATES["A_PHOTO"]
-    bot.send_message(
-        uid,
-        "🖼️ Описание сохранено. Теперь **отправьте фотографию товара (как ФАЙЛ, не сжимая)**:",
-    )
-
-
-# Хендлер загрузки фото
-@bot.message_handler(
-    content_types=["photo", "document"],
-    func=lambda m: user_state.get(m.chat.id, {}).get("sub_mode") == "add_product"
-    and user_state.get(m.chat.id, {}).get("step") == ADMIN_STATES["A_PHOTO"],
-)
-def handle_add_product_photo(message):
-    uid = message.chat.id
-
-    if message.photo:
-        file_id = message.photo[-1].file_id
-    elif message.document and "image" in message.document.mime_type:
-        file_id = message.document.file_id
-    else:
-        return bot.send_message(
-            uid, "❌ Пожалуйста, отправьте именно фотографию или изображение."
-        )
-
-    file_info = bot.get_file(file_id)
-    downloaded_file = bot.download_file(file_info.file_path)
-
-    filename = f"product_photos/prod_{int(time.time())}_{uid}.jpg"
-    os.makedirs("product_photos", exist_ok=True)
-
-    try:
-        with open(filename, "wb") as new_file:
-            new_file.write(downloaded_file)
-    except Exception as e:
-        print(f"Ошибка сохранения файла: {e}")
-        return bot.send_message(
-            uid, "❌ Ошибка сохранения фото на сервере. Попробуйте снова."
-        )
-
-    user_state[uid]["data"]["file_path"] = filename
-    user_state[uid]["step"] = ADMIN_STATES["A_STORE"]
 
     stores = get_all_stores()
     if not stores:
-        return bot.send_message(
-            uid, "❌ Магазины не найдены! Создание товара невозможно."
-        )
+        return bot.send_message(uid, "❌ Каталог магазинов пуст.")
 
-    markup = types.InlineKeyboardMarkup()
-    for store in stores:
-        markup.add(
-            types.InlineKeyboardButton(
-                store["title"], callback_data=f"admin_store_{store['store_id']}"
-            )
+    # ДОБАВЛЕНИЕ ШУТКИ
+    joke = random.choice(grinch_jokes)
+
+    markup_buttons = [
+        types.InlineKeyboardButton(
+            store["title"], callback_data=f"store_{store['store_id']}"
         )
+        for store in stores
+    ]
+
+    # Кнопка "Назад" ведет в Главное меню
+    markup = create_inline_markup_with_back(
+        markup_buttons, back_callback_data="cmd_main_menu"
+    )
 
     bot.send_message(
-        uid, "📸 Фото сохранено. Теперь **выберите магазин**:", reply_markup=markup
+        uid, f"{joke}\n\nВыберите магазин:", reply_markup=markup, parse_mode="Markdown"
     )
 
 
-# Хендлер выбора магазина и подтверждения
-@bot.callback_query_handler(func=lambda call: call.data.startswith("admin_store_"))
-def handle_add_product_store_select(call):
+# -------------------------
+# ЭТАПЫ ПОКУПКИ (ОБНОВЛЕНО ДЛЯ КНОПОК "НАЗАД")
+# -------------------------
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("store_"))
+@anti_flood
+def handle_store_selection(call):
     uid = call.from_user.id
-    # Проверка, что ID является числом и есть в списке магазинов (опционально)
-    try:
-        store_id = int(call.data.split("_")[2])
-    except (IndexError, ValueError):
-        bot.answer_callback_query(
-            call.id, "❌ Некорректный ID магазина.", show_alert=True
-        )
-        return
+    store_id = call.data.split("_")[1]
 
-    if (
-        user_state.get(uid, {}).get("sub_mode") != "add_product"
-        or user_state[uid]["step"] != ADMIN_STATES["A_STORE"]
-    ):
-        # Если состояние не то, просто игнорируем или выдаем ошибку
-        bot.answer_callback_query(
-            call.id, "❌ Ошибка состояния. Начните снова.", show_alert=True
-        )
-        return
+    # Сохраняем store_id для кнопки "Назад" в следующем шаге
+    user_state[uid] = {"store_id": store_id}
 
-    user_state[uid]["data"]["store_id"] = store_id
-    user_state[uid]["step"] = ADMIN_STATES["A_CONFIRM"]
+    products = get_products_by_store(store_id)
 
-    data = user_state[uid]["data"]
-    confirm_text = (
-        "🔍 **Проверьте данные перед сохранением:**\n"
-        f"**Название:** {data['name']}\n"
-        f"**Цена:** {data['price']:.2f} $\n"
-        f"**Описание:** {data['description'][:100]}...\n"
-        f"**Путь к фото:** {data['file_path']}\n"
-        f"**ID Магазина:** {data['store_id']}"
-    )
-
-    markup = types.InlineKeyboardMarkup()
-    markup.add(
-        types.InlineKeyboardButton(
-            "✅ СОХРАНИТЬ в БД", callback_data="admin_save_product"
-        )
-    )
-
-    bot.edit_message_text(
-        confirm_text,
-        uid,
-        call.message.message_id,
-        reply_markup=markup,
-        parse_mode="Markdown",
-    )
-    bot.answer_callback_query(call.id)
-
-
-# Хендлер сохранения в БД
-@bot.callback_query_handler(func=lambda call: call.data == "admin_save_product")
-def handle_add_product_save(call):
-    uid = call.from_user.id
-    data = user_state.get(uid, {}).get("data")
-
-    if not data or user_state.get(uid, {}).get("sub_mode") != "add_product":
+    if not products:
         return bot.edit_message_text(
-            "❌ Ошибка. Данные для сохранения не найдены.",
-            uid,
+            "❌ Товары в этом магазине отсутствуют.",
+            call.message.chat.id,
             call.message.message_id,
-            reply_markup=admin_menu(),
+            reply_markup=back_to_main_menu_inline(),
         )
-
-    try:
-        query = """
-            INSERT INTO products (name, price, description, file_path, store_id)
-            VALUES (%s, %s, %s, %s, %s);
-        """
-        execute_query(
-            query,
-            (
-                data["name"],
-                data["price"],
-                data["description"],
-                data["file_path"],
-                data["store_id"],
-            ),
-        )
-
-        user_state[uid] = {"mode": "admin"}
-
-        bot.edit_message_text(
-            f"🎉 **Товар '{data['name']}' успешно добавлен в базу данных!**",
-            uid,
-            call.message.message_id,
-            reply_markup=admin_menu(),
-            parse_mode="Markdown",
-        )
-    except Exception as e:
-        # В случае ошибки сохранения фото нужно удалить файл с диска
-        file_path = data.get("file_path")
-        if file_path and os.path.exists(file_path):
-            os.remove(file_path)
-
-        user_state[uid] = {"mode": "admin"}
-        bot.edit_message_text(
-            f"❌ **Критическая ошибка при сохранении в БД:** {e}",
-            uid,
-            call.message.message_id,
-            reply_markup=admin_menu(),
-            parse_mode="Markdown",
-        )
-    bot.answer_callback_query(call.id)
-
-
-# -------------------------
-# АДМИН ПАНЕЛЬ: ИЗМЕНЕНИЕ ТОВАРА
-# -------------------------
-
-
-@bot.message_handler(func=lambda m: m.text == "✏️ Изменить товар")
-def handle_modify_product_start(message):
-    uid = message.chat.id
-    if uid not in ADMIN_IDS:
-        return
-
-    stores = get_all_stores()
-    if not stores:
-        return bot.send_message(
-            uid, "❌ Магазины не найдены. Нечего менять.", reply_markup=admin_menu()
-        )
-
-    user_state[uid] = {
-        "mode": "admin",
-        "sub_mode": "modify_product",
-        "step": ADMIN_STATES["M_SELECT_STORE"],
-    }
 
     markup_buttons = [
         types.InlineKeyboardButton(
-            store["title"], callback_data=f"admin_mod_store_{store['store_id']}"
-        )
-        for store in stores
-    ]
-    markup = create_inline_markup_with_back(
-        markup_buttons, back_callback_data="cmd_admin_back_to_menu"
-    )
-
-    bot.send_message(
-        uid, "Выберите магазин, товар в котором хотите изменить:", reply_markup=markup
-    )
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("admin_mod_store_"))
-def handle_modify_store_selection(call):
-    uid = call.from_user.id
-    if user_state.get(uid, {}).get("sub_mode") != "modify_product":
-        bot.answer_callback_query(call.id, "❌ Ошибка состояния.", show_alert=True)
-        return
-
-    store_id = call.data.split("_")[-1]
-
-    products = get_products_by_store(store_id)
-    if not products:
-        bot.answer_callback_query(
-            call.id, "Товары в этом магазине отсутствуют.", show_alert=True
-        )
-        return
-
-    user_state[uid]["data"] = {"store_id": store_id}
-    user_state[uid]["step"] = ADMIN_STATES["M_SELECT_PRODUCT"]
-
-    markup_buttons = [
-        types.InlineKeyboardButton(
-            f"{product['name']} (${product['price']:.2f})",
-            callback_data=f"admin_mod_product_{product['product_id']}",
+            product["name"], callback_data=f"product_{store_id}_{product['product_id']}"
         )
         for product in products
     ]
+
+    # Кнопка "Назад" ведет к списку магазинов (cmd_buy_callback)
     markup = create_inline_markup_with_back(
-        markup_buttons, back_callback_data="cmd_admin_back_to_mod_store"
+        markup_buttons, back_callback_data="cmd_buy_callback"
     )
 
     bot.edit_message_text(
-        "Выберите товар для изменения:",
+        "Выберите товар:",
         call.message.chat.id,
         call.message.message_id,
         reply_markup=markup,
@@ -652,49 +210,27 @@ def handle_modify_store_selection(call):
     bot.answer_callback_query(call.id)
 
 
-@bot.callback_query_handler(
-    func=lambda call: call.data.startswith("admin_mod_product_")
-)
-def handle_modify_product_selection(call):
+@bot.callback_query_handler(func=lambda call: call.data == "cmd_buy_callback")
+@anti_flood
+def handle_back_to_buy(call):
+    # Повторяем логику handle_buy_button для возврата к магазинам
     uid = call.from_user.id
-    if user_state.get(uid, {}).get("sub_mode") != "modify_product":
-        bot.answer_callback_query(call.id, "❌ Ошибка состояния.", show_alert=True)
-        return
+    stores = get_all_stores()
 
-    product_id = call.data.split("_")[-1]
-    details = get_product_details_by_id(product_id)
-    if not details:
-        bot.answer_callback_query(call.id, "Товар не найден!", show_alert=True)
-        return
-
-    # Сохраняем все детали товара для удобства и сброса состояния
-    user_state[uid]["data"]["product_id"] = product_id
-    user_state[uid]["data"]["current_details"] = details
-    user_state[uid]["step"] = ADMIN_STATES["M_SELECT_FIELD"]
-
-    product_info = f"**Выбран товар:** {details['name']} (ID: {product_id})\nЦена: {details['price']:.2f} $\n"
-
-    markup = types.InlineKeyboardMarkup()
-    markup.add(
-        types.InlineKeyboardButton("📝 Название", callback_data="admin_mod_field_name"),
-        types.InlineKeyboardButton("💰 Цена", callback_data="admin_mod_field_price"),
-    )
-    markup.add(
+    markup_buttons = [
         types.InlineKeyboardButton(
-            "📖 Описание", callback_data="admin_mod_field_description"
-        ),
-        types.InlineKeyboardButton("🖼️ Фото", callback_data="admin_mod_field_photo"),
-    )
-    # Кнопка назад возвращает к списку товаров в текущем магазине
-    markup.add(
-        types.InlineKeyboardButton(
-            "🔙 Назад к списку товаров",
-            callback_data=f"admin_mod_store_{user_state[uid]['data']['store_id']}",
+            store["title"], callback_data=f"store_{store['store_id']}"
         )
+        for store in stores
+    ]
+    markup = create_inline_markup_with_back(
+        markup_buttons, back_callback_data="cmd_main_menu"
     )
+
+    joke = random.choice(grinch_jokes)
 
     bot.edit_message_text(
-        product_info + "\nВыберите, что хотите изменить:",
+        f"{joke}\n\nВыберите магазин:",
         call.message.chat.id,
         call.message.message_id,
         reply_markup=markup,
@@ -703,244 +239,38 @@ def handle_modify_product_selection(call):
     bot.answer_callback_query(call.id)
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("admin_mod_field_"))
-def handle_modify_field_selection(call):
+@bot.callback_query_handler(func=lambda call: call.data.startswith("product_"))
+@anti_flood
+def handle_product_selection(call):
     uid = call.from_user.id
-    if (
-        user_state.get(uid, {}).get("sub_mode") != "modify_product"
-        or user_state[uid]["step"] != ADMIN_STATES["M_SELECT_FIELD"]
-    ):
-        bot.answer_callback_query(call.id, "❌ Ошибка состояния.", show_alert=True)
-        return
-
-    field = call.data.split("_")[-1]
-    user_state[uid]["data"]["field"] = field
-    user_state[uid]["step"] = ADMIN_STATES["M_NEW_VALUE"]
-
-    prompt = {
-        "name": "Введите **новое название** товара:",
-        "price": "Введите **новую цену** товара (например, 75.50):",
-        "description": "Введите **новое описание** товара:",
-        "photo": "Отправьте **новую фотографию** товара (как ФАЙЛ, не сжимая):",
-    }.get(field, "Введите новое значение:")
-
-    bot.edit_message_text(
-        prompt, call.message.chat.id, call.message.message_id, parse_mode="Markdown"
-    )
-    bot.answer_callback_query(call.id)
-
-
-@bot.message_handler(
-    content_types=["text", "photo", "document"],
-    func=lambda m: user_state.get(m.chat.id, {}).get("sub_mode") == "modify_product"
-    and user_state.get(m.chat.id, {}).get("step") == ADMIN_STATES["M_NEW_VALUE"],
-)
-def handle_modify_new_value(message):
-    uid = message.chat.id
-    state_data = user_state[uid]["data"]
-    field = state_data["field"]
-    product_id = state_data["product_id"]
-    new_value = None
-    old_file_path = state_data["current_details"].get("file_path")
-
-    # 1. Обработка Фотографии
-    if field == "photo":
-        if message.photo:
-            file_id = message.photo[-1].file_id
-        elif message.document and "image" in message.document.mime_type:
-            file_id = message.document.file_id
-        else:
-            return bot.send_message(
-                uid, "❌ Пожалуйста, отправьте именно фотографию или изображение."
-            )
-
-        file_info = bot.get_file(file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-
-        new_filename = f"product_photos/prod_mod_{int(time.time())}_{product_id}.jpg"
-        os.makedirs(
-            "product_photos", exist_ok=True
-        )  # Гарантируем, что папка существует
-
-        try:
-            with open(new_filename, "wb") as new_file:
-                new_file.write(downloaded_file)
-            new_value = new_filename
-        except Exception as e:
-            return bot.send_message(uid, f"❌ Ошибка сохранения фото: {e}")
-
-    # 2. Обработка Текста/Цены
-    elif field == "price":
-        if not message.text:
-            return bot.send_message(uid, "❌ Цена не может быть пустой.")
-        try:
-            new_value = float(message.text)
-            if new_value <= 0:
-                raise ValueError
-        except ValueError:
-            return bot.send_message(
-                uid, "❌ Некорректный формат цены. Введите число (например, 75.50):"
-            )
-    elif field in ["name", "description"]:
-        if not message.text:
-            return bot.send_message(uid, f"❌ {field} не может быть пустым.")
-        new_value = message.text
-    else:
-        # Если пришел текст, но ожидалось фото (или наоборот) - игнорируем
-        return  # Ничего не делаем, ждем правильный контент
-
-    # 3. Сохранение в БД
     try:
-        # Имя поля (field) берется из call_data, что делает запрос уязвимым для SQL Injection,
-        # но в контексте бота с ограниченными админами и простыми полями (name, price, etc.)
-        # это временно допустимо, пока не будет реализован ORM/параметризация для имени поля.
-        query = f"UPDATE products SET {field} = %s WHERE product_id = %s;"
-        execute_query(query, (new_value, product_id))
+        _, store_id, product_id = call.data.split("_")
+        product_details = get_product_details_by_id(
+            int(product_id)
+        )  # Получаем детали для следующего шага
+    except (IndexError, ValueError):
+        return bot.send_message(uid, "❌ Ошибка ID товара.")
 
-        # Если меняли фото, удаляем старый файл
-        if field == "photo" and old_file_path and os.path.exists(old_file_path):
-            try:
-                os.remove(old_file_path)
-            except Exception as e:
-                print(f"WARNING: Не удалось удалить старое фото {old_file_path}: {e}")
+    if not product_details:
+        return bot.send_message(uid, "❌ Товар не найден.")
 
-        # 4. Сброс состояния и ответ
-        user_state[uid] = {"mode": "admin"}
-        bot.send_message(
-            uid,
-            f"🎉 **Поле '{field}' для товара ID:{product_id} успешно обновлено!**",
-            parse_mode="Markdown",
-            reply_markup=admin_menu(),
-        )
+    user_state[uid] = {"current_product_details": product_details, "store_id": store_id}
 
-    except Exception as e:
-        # Если была ошибка БД, и мы сохранили новый файл, его нужно удалить
-        if field == "photo" and new_value and os.path.exists(new_value):
-            os.remove(new_value)
-
-        user_state[uid] = {"mode": "admin"}
-        bot.send_message(
-            uid,
-            f"❌ **Критическая ошибка при обновлении БД:** {e}",
-            parse_mode="Markdown",
-            reply_markup=admin_menu(),
-        )
-
-
-# -------------------------
-# АДМИН ПАНЕЛЬ: УДАЛЕНИЕ ТОВАРА
-# -------------------------
-
-
-@bot.message_handler(func=lambda m: m.text == "🗑️ Удалить товар")
-def handle_delete_product_start(message):
-    uid = message.chat.id
-    if uid not in ADMIN_IDS:
-        return
-
-    stores = get_all_stores()
-    if not stores:
-        return bot.send_message(
-            uid, "❌ Магазины не найдены. Нечего удалять.", reply_markup=admin_menu()
-        )
-
-    user_state[uid] = {
-        "mode": "admin",
-        "sub_mode": "delete_product",
-        "step": ADMIN_STATES["D_SELECT_STORE"],
-    }
+    # ... (код отображения цены и описания)
 
     markup_buttons = [
-        types.InlineKeyboardButton(
-            store["title"], callback_data=f"admin_del_store_{store['store_id']}"
-        )
-        for store in stores
+        types.InlineKeyboardButton(address, callback_data=f"addr_{product_id}_{i}")
+        for i, address in enumerate(ADDRESSES)
     ]
+
+    # Кнопка "Назад" ведет обратно к списку товаров в этом магазине
     markup = create_inline_markup_with_back(
-        markup_buttons, back_callback_data="cmd_admin_back_to_menu"
+        markup_buttons, back_callback_data=f"store_{store_id}"
     )
 
-    bot.send_message(
-        uid, "Выберите магазин, товар в котором хотите удалить:", reply_markup=markup
-    )
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("admin_del_store_"))
-def handle_delete_store_selection(call):
-    uid = call.from_user.id
-    if user_state.get(uid, {}).get("sub_mode") != "delete_product":
-        bot.answer_callback_query(call.id, "❌ Ошибка состояния.", show_alert=True)
-        return
-
-    store_id = call.data.split("_")[-1]
-
-    products = get_products_by_store(store_id)
-    if not products:
-        bot.answer_callback_query(
-            call.id, "Товары в этом магазине отсутствуют.", show_alert=True
-        )
-        return
-
-    user_state[uid]["data"] = {"store_id": store_id}
-    user_state[uid]["step"] = ADMIN_STATES["D_SELECT_PRODUCT"]
-
-    markup_buttons = [
-        types.InlineKeyboardButton(
-            f"{product['name']} (${product['price']:.2f})",
-            callback_data=f"admin_del_product_{product['product_id']}",
-        )
-        for product in products
-    ]
-    markup = create_inline_markup_with_back(
-        markup_buttons, back_callback_data="cmd_admin_back_to_del_store"
-    )
-
+    # ... (код отправки сообщения)
     bot.edit_message_text(
-        "Выберите товар для удаления:",
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=markup,
-    )
-    bot.answer_callback_query(call.id)
-
-
-@bot.callback_query_handler(
-    func=lambda call: call.data.startswith("admin_del_product_")
-)
-def handle_delete_product_selection(call):
-    uid = call.from_user.id
-    if user_state.get(uid, {}).get("sub_mode") != "delete_product":
-        bot.answer_callback_query(call.id, "❌ Ошибка состояния.", show_alert=True)
-        return
-
-    product_id = call.data.split("_")[-1]
-    details = get_product_details_by_id(product_id)
-    if not details:
-        bot.answer_callback_query(call.id, "Товар не найден!", show_alert=True)
-        return
-
-    user_state[uid]["data"]["product_id"] = product_id
-    user_state[uid]["data"]["file_path"] = details.get("file_path")
-    user_state[uid]["step"] = ADMIN_STATES["D_CONFIRM"]
-
-    product_info = f"**Выбран товар:** {details['name']} (ID: {product_id})\n\n"
-
-    markup = types.InlineKeyboardMarkup()
-    markup.add(
-        types.InlineKeyboardButton(
-            "🚨 ПОДТВЕРДИТЬ УДАЛЕНИЕ", callback_data=f"admin_del_confirm_{product_id}"
-        )
-    )
-    # Кнопка отмены возвращает к списку товаров
-    markup.add(
-        types.InlineKeyboardButton(
-            "🔙 Отмена",
-            callback_data=f"admin_del_store_{user_state[uid]['data']['store_id']}",
-        )
-    )
-
-    bot.edit_message_text(
-        product_info + "Вы уверены, что хотите удалить этот товар безвозвратно?",
+        f"**Выбран товар:** {product_details['name']}\nЦена: {product_details['price']:.2f} $\n\nВыберите адрес:",
         call.message.chat.id,
         call.message.message_id,
         reply_markup=markup,
@@ -949,168 +279,131 @@ def handle_delete_product_selection(call):
     bot.answer_callback_query(call.id)
 
 
-@bot.callback_query_handler(
-    func=lambda call: call.data.startswith("admin_del_confirm_")
-)
-def handle_delete_product_confirm(call):
+# -------------------------
+# ЭТАП 4: Обработка выбора адреса (ПОДТВЕРЖДЕНИЕ С ФОТО)
+# -------------------------
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("addr_"))
+@anti_flood
+def handle_address_selection(call):
     uid = call.from_user.id
-    if user_state.get(uid, {}).get("sub_mode") != "delete_product":
-        bot.answer_callback_query(call.id, "❌ Ошибка состояния.", show_alert=True)
+
+    # 1. ПРОВЕРКА ЛИМИТА
+    orders = find_orders_by_user(uid)
+    unpaid_count = 0
+    now = datetime.now()
+
+    if orders:
+        for order_id, data in orders.items():
+            if data.get("status") == "waiting_payment":
+                expiry_timestamp = data.get("reservation_expires_at", 0)
+                expiry_dt = datetime.fromtimestamp(expiry_timestamp)
+                if expiry_dt > now:
+                    unpaid_count += 1
+
+    if unpaid_count >= MAX_UNPAID_ORDERS:
+        bot.answer_callback_query(
+            call.id,
+            f"Лимит! У вас уже {MAX_UNPAID_ORDERS} неоплаченных заказов.",
+            show_alert=True,
+        )
+        # Отправляем отдельное сообщение, т.к. inline-меню нельзя обновить
+        bot.send_message(
+            uid,
+            f"❌ **Лимит неоплаченных заказов ({MAX_UNPAID_ORDERS}) достигнут.**\n\n",
+            parse_mode="Markdown",
+            reply_markup=back_to_main_menu_inline(),
+        )
         return
 
-    product_id = call.data.split("_")[-1]
-    file_path = user_state[uid]["data"].get("file_path")
+    # 2. ПОЛУЧЕНИЕ ДАННЫХ
+    try:
+        _, product_id, address_index = call.data.split("_")
+        product_id = int(product_id)
+        address_index = int(address_index)
+        selected_address = ADDRESSES[address_index]
+    except (IndexError, ValueError):
+        return bot.send_message(uid, "❌ Ошибка выбора товара/адреса.")
+
+    product_details = get_product_details_by_id(product_id)
+    if not product_details:
+        return bot.send_message(uid, "❌ Ошибка: товар не найден.")
+
+    price = product_details["price"]
+    product_name = product_details["name"]
+    file_path = product_details.get(
+        "file_path", "placeholder.jpg"
+    )  # Убедитесь, что файл существует
+    product_description = product_details.get(
+        "description", "Описание не предоставлено."
+    )
+
+    # 3. БРОНИРОВАНИЕ И СОЗДАНИЕ ИНВОЙСА
+    reservation_expires_at = datetime.now() + timedelta(hours=INITIAL_RESERVATION_HOURS)
+
+    # --- ВРЕМЕННЫЙ КОД ДЛЯ OXAPAY: заменяем на реальный вызов ---
+    # invoice = create_invoice(price, product_name)
+    # payment_url = invoice['url']
+    payment_url = "https://oxapay.io/pay"
+    # --- КОНЕЦ ВРЕМЕННОГО КОДА ---
+
+    new_order_data = {
+        "product_id": product_id,
+        "product_name": product_name,
+        "price": price,
+        "address": selected_address,
+        "status": "waiting_payment",
+        "payment_url": payment_url,
+        "reservation_expires_at": reservation_expires_at.timestamp(),
+        "is_reserved": True,
+    }
+
+    order_id = add_order(uid, new_order_data)
+
+    # 4. ОТПРАВКА ПОДТВЕРЖДЕНИЯ С ФОТОГРАФИЕЙ
+    caption_text = (
+        f"✅ **Подтверждение заказа №{order_id}**\n\n"
+        f"**Товар:** {product_name}\n"
+        f"**Адрес:** {selected_address}\n"
+        f"**Цена:** {price:.2f} $\n"
+        f"**Бронь до:** {reservation_expires_at.strftime('%Y-%m-%d %H:%M:%S')} (UTC)\n\n"
+        f"**Описание:**\n{product_description}"
+    )
 
     try:
-        # 1. Удаление из БД
-        query = "DELETE FROM products WHERE product_id = %s;"
-        execute_query(query, (product_id,))
-
-        # 2. Удаление файла с сервера
-        if file_path and os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-            except Exception as e:
-                print(f"WARNING: Не удалось удалить файл {file_path}: {e}")
-
-        # 3. Сброс состояния и ответ
-        user_state[uid] = {"mode": "admin"}
-        bot.edit_message_text(
-            f"✅ **Товар ID:{product_id} и его фотография успешно удалены!**",
+        with open(file_path, "rb") as f:
+            bot.send_photo(uid, f, caption=caption_text, parse_mode="Markdown")
+    except FileNotFoundError:
+        bot.send_message(
             uid,
-            call.message.message_id,
+            caption_text + "\n\n❌ **ВНИМАНИЕ:** Фотография товара не найдена.",
             parse_mode="Markdown",
-            reply_markup=admin_menu(),
         )
 
-    except Exception as e:
-        user_state[uid] = {"mode": "admin"}
-        bot.edit_message_text(
-            f"❌ **Критическая ошибка при удалении:** {e}",
-            uid,
-            call.message.message_id,
-            parse_mode="Markdown",
-            reply_markup=admin_menu(),
+    # 5. ОТПРАВКА КНОПКИ ОПЛАТЫ
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("💳 Оплатить", url=payment_url))
+
+    # Кнопка назад должна вести к списку адресов (обратно к выбору продукта)
+    markup.add(
+        types.InlineKeyboardButton(
+            "🔙 Назад (Выбрать другой адрес)", callback_data=f"product_{product_id}"
         )
-    bot.answer_callback_query(call.id)
+    )
 
-
-# -------------------------
-# ХЕНДЛЕРЫ КНОПОК "НАЗАД" ДЛЯ АДМИНА
-# -------------------------
-
-
-@bot.callback_query_handler(func=lambda call: call.data == "cmd_admin_back_to_menu")
-def cmd_admin_back_to_menu_callback(call):
-    uid = call.from_user.id
-    if uid not in ADMIN_IDS:
-        bot.answer_callback_query(call.id, "🚫 Доступ запрещен.", show_alert=True)
-        return
-
-    # Устанавливаем админ-режим и сбрасываем под-режим
-    user_state[uid] = {"mode": "admin"}
-
-    bot.edit_message_text(
-        "Вы вернулись в меню Администратора.",
+    bot.send_message(
         uid,
-        call.message.message_id,
-        reply_markup=admin_menu(),
-    )
-    bot.answer_callback_query(call.id)
-
-
-@bot.callback_query_handler(
-    func=lambda call: call.data == "cmd_admin_back_to_mod_store"
-)
-def cmd_admin_back_to_mod_store_callback(call):
-    uid = call.from_user.id
-    if user_state.get(uid, {}).get("mode") != "admin":
-        bot.answer_callback_query(call.id, "❌ Ошибка состояния.", show_alert=True)
-        return
-
-    # Устанавливаем под-режим и шаг для повторного вызова выбора магазина
-    user_state[uid].update(
-        {
-            "sub_mode": "modify_product",
-            "step": ADMIN_STATES["M_SELECT_STORE"],
-        }
+        "**Для завершения** перейдите по ссылке ниже.\n"
+        "Не забудьте отправить **TxID** после оплаты!",
+        parse_mode="Markdown",
+        reply_markup=markup,
     )
 
-    # Имитируем нажатие кнопки "✏️ Изменить товар"
-    call.message.text = "✏️ Изменить товар"
-    handle_modify_product_start(call.message)
-    bot.answer_callback_query(call.id)
+    # Удаляем сообщение с выбором адреса
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass  # Игнорируем ошибку удаления
 
-
-@bot.callback_query_handler(
-    func=lambda call: call.data == "cmd_admin_back_to_del_store"
-)
-def cmd_admin_back_to_del_store_callback(call):
-    uid = call.from_user.id
-    if user_state.get(uid, {}).get("mode") != "admin":
-        bot.answer_callback_query(call.id, "❌ Ошибка состояния.", show_alert=True)
-        return
-
-    # Устанавливаем под-режим и шаг для повторного вызова выбора магазина
-    user_state[uid].update(
-        {
-            "sub_mode": "delete_product",
-            "step": ADMIN_STATES["D_SELECT_STORE"],
-        }
-    )
-
-    # Имитируем нажатие кнопки "🗑️ Удалить товар"
-    call.message.text = "🗑️ Удалить товар"
-    handle_delete_product_start(call.message)
-    bot.answer_callback_query(call.id)
-
-
-# -------------------------
-# ОБЩИЙ ХЕНДЛЕР: НЕИЗВЕСТНЫЕ СООБЩЕНИЯ (ВАЖНО для админ-режима)
-# -------------------------
-
-
-@bot.message_handler(
-    content_types=[
-        "text",
-        "photo",
-        "document",
-        "audio",
-        "video",
-        "voice",
-        "location",
-        "contact",
-        "sticker",
-    ]
-)
-def handle_general_messages(message):
-    uid = message.chat.id
-
-    # Если пользователь в режиме админа, но не в состоянии ожидания ввода,
-    # мы просто игнорируем сообщение, чтобы не мешать другим хендлерам.
-    if user_state.get(uid, {}).get("mode") == "admin":
-        current_step = user_state.get(uid, {}).get("step")
-        # Если это не один из шагов, где мы ждем текст/фото, просто игнорируем.
-        if current_step not in [
-            ADMIN_STATES["A_NAME"],
-            ADMIN_STATES["A_PRICE"],
-            ADMIN_STATES["A_DESC"],
-            ADMIN_STATES["A_PHOTO"],
-            ADMIN_STATES["M_NEW_VALUE"],
-        ]:
-            return
-
-    # Если это обычный пользователь, просто отвечаем "неизвестная команда"
-    bot.send_message(
-        uid, "🤷‍♂️ Неизвестная команда. Пожалуйста, используйте кнопки меню."
-    )
-
-
-# Запуск бота
-if __name__ == "__main__":
-    # Убедитесь, что папка для фото существует при запуске
-    os.makedirs("product_photos", exist_ok=True)
-    print("Бот запущен...")
-    # При использовании вебхуков (как в server.py) этот код не должен запускаться.
-    # Если запускаете локально для тестирования, используйте bot.infinity_polling().
-    # bot.polling(none_stop=True)
+    bot.answer_callback_query(call.id, "Заказ создан.")
