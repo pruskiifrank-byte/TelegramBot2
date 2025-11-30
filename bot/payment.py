@@ -2,10 +2,12 @@ import requests
 import json
 import time
 from bot.config import OXAPAY_API_KEY, BASE_URL
+
 # Импортируем функции управления хранилищем, а не просто словарь
-from bot.storage import orders, add_order, update_order
+from bot.storage import add_order, update_order
 
 OXAPAY_INVOICE_URL = "https://api.oxapay.com/v1/payment/invoice"
+
 
 def create_invoice(user_id, amount_usd, file_path):
     """
@@ -13,10 +15,7 @@ def create_invoice(user_id, amount_usd, file_path):
     """
     order_id = f"ORD-{int(time.time())}"
 
-    headers = {
-        "merchant_api_key": OXAPAY_API_KEY, 
-        "Content-Type": "application/json"
-    }
+    headers = {"merchant_api_key": OXAPAY_API_KEY, "Content-Type": "application/json"}
 
     data = {
         "amount": amount_usd,
@@ -28,7 +27,7 @@ def create_invoice(user_id, amount_usd, file_path):
         "auto_withdrawal": False,
         "mixed_payment": True,
         "callback_url": f"{BASE_URL}/oxapay/ipn",
-        "return_url": "https://t.me/Elk_ShopBot", # Замените на юзернейм своего бота
+        "return_url": "https://t.me/Elk_ShopBot",  # Замените на юзернейм своего бота
         "email": "",
         "order_id": order_id,
         "thanks_message": "Спасибо за оплату!",
@@ -57,7 +56,7 @@ def create_invoice(user_id, amount_usd, file_path):
         "file": file_path,
         "status": "pending",
         "track_id": payment_data["track_id"],
-        "price": amount_usd # Сохраняем цену сразу
+        "price": amount_usd,  # Сохраняем цену сразу
     }
     add_order(order_id, new_order_data)
 
@@ -70,18 +69,13 @@ def handle_oxapay_callback(data):
     """
     order_id = data.get("order_id")
     track_id = data.get("track_id")
-    status = data.get("status") # "paid", "confirmed", etc
+    status = data.get("status")  # "paid", "confirmed", etc
     amount = data.get("amount")
 
     if not order_id or order_id not in orders:
         return False
 
     # ВАЖНО: Используем update_order для сохранения на диск
-    update_order(
-        order_id, 
-        status=status, 
-        paid_amount=amount, 
-        track_id=track_id
-    )
+    update_order(order_id, status=status, paid_amount=amount, track_id=track_id)
 
     return True

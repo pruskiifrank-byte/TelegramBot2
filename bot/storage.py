@@ -1,84 +1,99 @@
-import json
-import threading
+# bot/storage.py
+
+from .db import execute_query
 import time
-from pathlib import Path
+from decimal import Decimal
 
-_lock = threading.Lock()
-# Файл будет создан в корне проекта (рядом с server.py)
-_orders_path = Path(__file__).parent.parent / "orders.json"
+def get_product_by_shop_key(shop_key):
+    """Получает данные товара из БД по ключу магазина."""
+    query = """
+    SELECT product_id, price_usd, file_path, delivery_text, name, title 
+    FROM products 
+    WHERE shop_key = %s;
+    """
+    result = execute_query(query, (shop_key,), fetch=True)
+    if result:
+        # product_id, price_usd, file_path, delivery_text, name, title
+        row = result[0]
+        return {
+            "product_id": row[0],
+            "price_usd": float(row[1]) if isinstance(row[1], Decimal) else float(row[1]),
+            "file_path": row[2],
+            "delivery_text": row[3],
+            "name": row[4],
+            "title": row[5]
+        }
+    return None
 
-# in-memory orders dict: order_id -> {...}
-orders = {}
-
-
-def _ensure_file():
-    if not _orders_path.exists():
-        try:
-            _orders_path.write_text("{}", encoding="utf-8")
-        except Exception:
-            pass
-
-
-def load_orders():
-    _ensure_file()
-    try:
-        with _lock:
-            text = _orders_path.read_text(encoding="utf-8")
-            data = json.loads(text or "{}")
-            orders.clear()
-            for k, v in data.items():
-                orders[k] = v
-    except Exception:
-        pass
-
-
-def save_orders():
-    try:
-        with _lock:
-            _orders_path.write_text(
-                json.dumps(orders, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-    except Exception:
-        pass
-
-
-# Helpers
-def add_order(user_id: int, price_usd: float, store_id: str, product_id: str):
-    """Добавляет новый заказ в хранилище."""
+def add_order(user_id: int, product_id: int, price_usd: float):
+    """Добавляет новый заказ в БД."""
     order_id = f"ORD-{int(time.time())}-{user_id}"
-
-    # Расширяем структуру заказа
-    orders[order_id] = {
-        "user_id": user_id,
-        "price_usd": price_usd,
-        "status": "pending",  # 'pending', 'waiting_payment', 'paid'
-        "store_id": store_id,  # НОВОЕ: ID магазина
-        "product_id": product_id,  # НОВОЕ: ID товара
-        "address": None,  # НОВОЕ: Адрес доставки
-        "payment_url": None,
-        "track_id": None,
-    }
-
-    # Сохранение в файл
-    save_orders()
+    
+    query = """
+    INSERT INTO orders (order_id, user_id, product_id, price_usd)
+    VALUES (%s, %s, %s, %s);
+    """
+    execute_query(query, (order_id, user_id, product_id, price_usd))
     return order_id
 
-
 def update_order(order_id: str, **kwargs):
-    o = orders.get(order_id)
-    if not o:
+    """Обновляет статус или детали заказа в БД."""
+    if not kwargs:
         return
-    o.update(kwargs)
-    save_orders()
-
+    
+    set_clauses = []
+    params = []
+    
+    for key, value in kwargs.items():
+        set_clauses.append(f"{key} = %s")
+        params.append(value)
+    
+    params.append(order_id)
+    
+    query = f"UPDATE orders SET {', '.join(set_clauses)} WHERE order_id = %s;"
+    execute_query(query, tuple(params))
 
 def get_order(order_id: str):
-    return orders.get(order_id)
-
+    """Получает детали заказа по ID."""
+    query = "SELECT * FROM orders WHERE order_id = %s;"
+    result = execute_query(query, (order_id,), fetch=True)
+    
+    if result:
+        # Используем список колонок для создания словаря
+        cols = ['order_id', 'user_id', 'product_id', 'pickup_address', 'price_usd', 
+                'status', 'delivery_status', 'oxapay_track_id', 'payment_url', 'created_at', 'paid_at']
+        
+        order_data = dict(zip(cols, result[0]))
+        
+        # Конвертируем Decimal в float, если это необходимо
+        if 'price_usd' in order_data and isinstance(order_data['price_usd'], Decimal):
+            order_data['price_usd'] = float(order_data['price_usd'])
+            
+        return order_data
+    return None
 
 def find_orders_by_user(user_id: int):
-    return {oid: d for oid, d in orders.items() if d.get("user_id") == user_id}
-
-
-# Загружаем при старте
-load_orders()
+    """Ищет все заказы пользователя."""
+    query = """
+    SELECT 
+        o.order_id, 
+        o.status, 
+        o.price_usd, 
+        p.name as product_name
+    FROM orders o
+    JOIN products p ON o.product_id = p.product_id
+    WHERE o.user_id = %s 
+    ORDER BY o.created_at DESC;
+    """
+    results = execute_query(query, (user_id,), fetch=True)
+    
+    orders_dict = {}
+    if results:
+        for row in results:
+            oid, status, price, product_name = row
+            orders_dict[oid] = {
+                "status": status, 
+                "price": float(price) if isinstance(price, Decimal) else float(price), 
+                "product_name": product_name
+            }
+    return orders_dict

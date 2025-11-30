@@ -1,33 +1,36 @@
+# server.py
+
 import os
+import json
 from flask import Flask, request, abort
 import telebot
+from bot.config import TELEGRAM_TOKEN
 from bot.bot import bot, give_product
-from bot.payment import handle_oxapay_callback
-from bot.storage import orders, get_order
+from bot.storage import update_order, get_order
+import time
+
+# ... (Инициализация app)
+
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+
+if not TELEGRAM_TOKEN:
+    raise ValueError("TELEGRAM_TOKEN не установлен")
 
 app = Flask(__name__)
 
-# Загружаем переменные (они уже загружены в bot/config, но здесь тоже нужны)
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TG_WEBHOOK_SECRET = os.getenv("TG_WEBHOOK_SECRET", "")
-
-def verify_telegram_request(req):
-    sig = req.headers.get("X-Telegram-Bot-Api-Secret-Token")
-    return sig == TG_WEBHOOK_SECRET
 
 # --- Telegram Webhook ---
 @app.route(f"/webhook/{TELEGRAM_TOKEN}", methods=["POST"])
 def telegram_webhook():
-    if not verify_telegram_request(request):
+
+    if request.headers.get("content-type") == "application/json":
+        json_str = request.get_data().decode("UTF-8")
+        update = telebot.types.Update.de_json(json_str)
+        bot.process_new_updates([update])
+        return "OK", 200
+    else:
         abort(403)
-    
-    # pyTelegramBotAPI требует JSON как строку или dict, но process_new_updates принимает список объектов Update
-    # Самый надежный способ для этой библиотеки:
-    json_str = request.get_data().decode('UTF-8')
-    update = telebot.types.Update.de_json(json_str)
-    
-    bot.process_new_updates([update])
-    return "OK", 200
+
 
 # --- OxaPay Webhook ---
 @app.route("/oxapay/ipn", methods=["POST"])
@@ -36,31 +39,34 @@ def oxapay_ipn():
     if not data:
         abort(400)
 
-    # 1. Обрабатываем и сохраняем статус в БД (handle_oxapay_callback)
-    success = handle_oxapay_callback(data)
-    if not success:
-        return "INVALID", 400
-
-    # 2. Проверяем, нужно ли выдать товар
     order_id = data.get("order_id")
-    order = get_order(order_id)
-    
-    # ЕСЛИ СТАТУС ОПЛАЧЕН И ТОВАР ЕЩЕ НЕ ВЫДАН
-    if order and order.get("status") == "paid" and order.get("delivery_status") != "delivered":
-        user_id = order.get("user_id")
-        
-        # 3. Вызываем функцию выдачи места выдачи!
-        if user_id:
-            give_product(user_id, order_id)
-            
+    status = data.get("status")  # 'paid', 'canceled' и т.д.
+
+    if not order_id or not status:
+        return "MISSING DATA", 400
+
+    # 1. Обновляем статус заказа в БД
+    if status == "paid":
+        # Используем update_order для установки статуса и времени оплаты
+        update_order(
+            order_id, status="paid", paid_at=time.strftime("%Y-%m-%d %H:%M:%S")
+        )
+    elif status == "canceled":
+        update_order(order_id, status="canceled")
+    # Добавьте другие статусы, если OxaPay их присылает
+
+    # 2. Выдача товара, если оплачено
+    if status == "paid":
+        order = get_order(order_id)
+        if (
+            order
+            and order.get("user_id")
+            and order.get("delivery_status") != "delivered"
+        ):
+            # Выдача товара, которая теперь отправляет фото тайника
+            give_product(order["user_id"], order_id)
+
     return "OK", 200
 
-@app.route("/")
-def index():
-    return "Bot Server is Running!", 200
 
-if __name__ == "__main__":
-    # Локальный запуск
-    import telebot # нужен для import
-    port = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+# ... (остальной код, если есть)

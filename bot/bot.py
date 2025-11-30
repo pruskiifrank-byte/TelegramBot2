@@ -1,42 +1,30 @@
-# bot.py (ОБНОВЛЕННАЯ ВЕРСИЯ)
+# bot/bot.py
 
 import telebot
 from telebot import types
 import time
 from bot.config import TELEGRAM_TOKEN
-
-# Внимание: предполагается, что create_invoice теперь создает и сохраняет order_id внутри
 from bot.payment import create_invoice
-
-# Внимание: предполагается, что update_order, get_order, find_orders_by_user работают
-from bot.storage import update_order, find_orders_by_user, get_order
+from bot.storage import (
+    update_order,
+    find_orders_by_user,
+    get_order,
+    get_product_by_shop_key,
+    add_order,
+)
+from bot.db import execute_query  # Для give_product
 
 # -------------------------
-# Каталог товаров и мест выдачи
+# Каталог товаров (Теперь только ключи и заголовки, данные в БД)
 # -------------------------
 SHOPS = {
-    "fruits": {
-        "title": "🍌 Scooby-Doo — Фрукты",
-        "product": {
-            "name": "Набор фруктов",
-            "file": "bot/images/fruits.jpg",  # Фотография тайника
-            "price": 5.00,  # Цена в USD
-            "delivery_text": "📍 Тайник у фонтана, смотри под скамейкой. Код: FRUITS1.",
-        },
-    },
-    "vegetables": {
-        "title": "🥕 MrGrinchShopZp — Овощи",
-        "product": {
-            "name": "Набор овощей",
-            "file": "bot/images/vegs.jpg",  # Фотография тайника
-            "price": 7.00,
-            "delivery_text": "📍 Тайник у столба, синий мешок. Код: VEGS2.",
-        },
-    },
+    "fruits": {"title": "🍌 Scooby-Doo — Фрукты"},
+    "vegetables": {"title": "🥕 MrGrinchShopZp — Овощи"},
 }
 
 ADDRESSES = ["Бульвар Шевченко", "Ул. Победы", "Проспект Мира"]
-user_state = {}  # Используется для временного хранения выбранного магазина
+user_state = {}
+
 # Создаём бота
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="HTML", threaded=False)
 
@@ -78,7 +66,7 @@ def cmd_orders(message):
         return
     text = "Ваши заказы:\n\n"
     for oid, data in user_orders.items():
-        text += f"• <code>{oid}</code> — {data.get('product_name', 'Товар')} — {data.get('status')}\n"
+        text += f"• <code>{oid}</code> — {data.get('product_name', 'Товар')} — **{data.get('status')}**\n"
     bot.send_message(uid, text, parse_mode="HTML")
 
 
@@ -106,17 +94,22 @@ def handle_main_menu_buttons(message):
         cmd_orders(message)
 
 
+@bot.message_handler(func=lambda m: m.text == "🔙 Назад")
+def handle_back(message):
+    bot.send_message(message.chat.id, "Меню:", reply_markup=main_menu())
+
+
 # -------------------------
 # Шаг 2: Выбор адреса (Inline-кнопки)
 # -------------------------
 @bot.callback_query_handler(func=lambda call: call.data.startswith("shop_"))
 def handle_shop_selection(call):
-    # 🚨 ИЗМЕНЕНИЕ: Добавляем временный текст, чтобы обеспечить мгновенный ответ и UX
+    # 🚨 РЕШЕНИЕ ТАЙМАУТА: Отвечаем немедленно
     bot.answer_callback_query(call.id, text="Загружаю адреса...", show_alert=False)
 
     uid = call.from_user.id
 
-    # 1. Извлекаем ключ магазина (shop_fruits -> fruits)
+    # 1. Извлекаем ключ магазина
     shop_key = call.data.split("_")[1]
     shop = SHOPS.get(shop_key)
 
@@ -154,48 +147,52 @@ def handle_shop_selection(call):
 # -------------------------
 @bot.callback_query_handler(func=lambda call: call.data.startswith("addr_"))
 def handle_address_selection(call):
-    bot.answer_callback_query(call.id, text="⏳ Создаю инвойс...")
-
+    # 🚨 РЕШЕНИЕ ТАЙМАУТА: Отвечаем немедленно (перед долгими операциями)
+    bot.answer_callback_query(call.id, text="⏳ Создаю инвойс...", show_alert=False)
     uid = call.from_user.id
 
-    # 1. Извлекаем данные: 'addr_fruits_Бульвар Шевченко'
+    # 1. Извлекаем данные
     try:
         _, shop_key, address = call.data.split("_", 2)
     except ValueError:
         return bot.send_message(uid, "Ошибка при обработке адреса.")
 
-    shop = SHOPS.get(shop_key)
-    if not shop:
-        return bot.send_message(uid, "Ошибка: Магазин не найден.")
+    # 2. ПОЛУЧЕНИЕ ДАННЫХ ТОВАРА ИЗ БД
+    product_data = get_product_by_shop_key(shop_key)
+    if not product_data:
+        return bot.send_message(uid, "Ошибка: Товар не найден в каталоге.")
 
-    product = shop["product"]
-    price = product["price"]
-    product_name = product["name"]
+    product_id = product_data["product_id"]
+    price = product_data["price_usd"]
+    product_name = product_data["name"]
+    shop_title = product_data["title"]
 
-    # 2. Создаем инвойс (и заказ)
-    # create_invoice должен вернуть (order_id, pay_url) и сохранить детали в storage.py
+    # 3. Создаем заказ в БД и инвойс OxaPay
+    order_id = add_order(uid, product_id, price)
     resp = create_invoice(
-        uid, price, product_name
-    )  # Предполагаем, что create_invoice теперь принимает product_name, а не file_path
-    if not resp:
+        uid, price, order_id
+    )  # create_invoice должен вернуть pay_url и track_id
+
+    if not resp or len(resp) != 2:
+        update_order(order_id, status="error")
         return bot.send_message(
-            uid, "❌ Ошибка создания платежа.", reply_markup=main_menu()
+            uid,
+            "❌ Ошибка создания платежа. Попробуйте снова.",
+            reply_markup=main_menu(),
         )
 
-    order_id, pay_url = resp
+    pay_url, track_id = resp
 
-    # 3. Дополняем заказ деталями
-    # file - это фото тайника, которое должно быть сохранено в заказе для последующей выдачи
+    # 4. Дополняем заказ деталями в БД
     update_order(
         order_id,
-        shop=shop_key,
-        product_name=product_name,
-        address=address,
-        file=product["file"],  # Сохраняем путь к фото тайника
-        delivery_text=product["delivery_text"],  # Сохраняем текст тайника
+        pickup_address=address,
+        status="waiting_payment",
+        payment_url=pay_url,
+        oxapay_track_id=track_id,
     )
 
-    # 4. Отправляем сообщение с кнопкой оплаты (Inline-кнопка)
+    # 5. Отправляем сообщение с кнопкой оплаты (Inline-кнопка)
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("💳 Оплатить", url=pay_url))
 
@@ -203,8 +200,8 @@ def handle_address_selection(call):
         chat_id=uid,
         message_id=call.message.message_id,
         text=(
-            f"✅ **Заказ #{order_id} создан!**\n\n"
-            f"Магазин: {shop['title']}\n"
+            f"✅ **Заказ `{order_id}` создан!**\n\n"
+            f"Магазин: {shop_title}\n"
             f"Товар: {product_name}\n"
             f"Адрес получения: *{address}*\n"
             f"Цена: **{price:.2f}$**\n\n"
@@ -213,7 +210,7 @@ def handle_address_selection(call):
         parse_mode="Markdown",
         reply_markup=markup,
     )
-    # 5. Очищаем состояние
+    # 6. Очищаем состояние
     user_state.pop(uid, None)
 
 
@@ -222,37 +219,37 @@ def handle_address_selection(call):
 # -------------------------
 def give_product(user_id, order_id):
     """
-    Отправляет пользователю ФОТОГРАФИЮ МЕСТА (тайника) и текст.
-    Вызывается из server.py после получения IPN со статусом 'paid'.
+    Отправляет пользователю ФОТОГРАФИЮ МЕСТА (тайника) и текст,
+    получая данные из БД.
     """
     od = get_order(order_id)
     if not od:
         return False
 
-    # Защита от повторной выдачи
     if od.get("delivery_status") == "delivered":
         return True
 
-    delivery_text = od.get("delivery_text")
-    file_path = od.get("file")  # Путь к фото тайника
+    # 1. Получаем данные тайника из таблицы PRODUCTS
+    query = "SELECT file_path, delivery_text FROM products WHERE product_id = %s;"
+    product_info = execute_query(query, (od["product_id"],), fetch=True)
 
-    if not delivery_text or not file_path:
-        # Этого не должно случиться, если update_order работает правильно
-        print(f"ERROR: Missing delivery data for order {order_id}")
+    if not product_info:
+        print(f"ERROR: Missing delivery data for product ID {od['product_id']}")
         bot.send_message(
-            user_id, "❌ Произошла ошибка при выдаче. Свяжитесь с поддержкой."
+            user_id, "❌ Произошла ошибка. Информация о товаре не найдена."
         )
         return False
 
+    file_path, delivery_text = product_info[0]
+
     try:
-        # 1. Отправляем сообщение о получении оплаты
+        # 2. Отправляем фото и текст тайника
         bot.send_message(
             user_id,
             "✅ **Оплата получена!** Вот ваше место выдачи:",
             parse_mode="Markdown",
         )
 
-        # 2. Отправляем ФОТОГРАФИЮ ТАЙНИКА и текст
         with open(file_path, "rb") as f:
             bot.send_photo(
                 user_id,
