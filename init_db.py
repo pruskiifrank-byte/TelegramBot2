@@ -92,5 +92,7 @@ def update_table_structure():
 
 
 if __name__ == "__main__":
-    # create_tables() # Это если с нуля
-    update_table_structure()  # <-- ЗАПУСТИ ЭТО
+    create_tables()  # Создаст таблицы
+    populate_stores()  # Создаст категории
+    update_table_structure()  # Добавит is_sold, если нет
+    print("✅ База данных полностью готова.")
