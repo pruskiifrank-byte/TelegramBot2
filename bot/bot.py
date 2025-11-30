@@ -7,11 +7,13 @@ from datetime import datetime, timedelta
 import math
 import random
 from bot.config import TELEGRAM_TOKEN
+from bot.config import ADMIN_IDS
 
 # Импортируем create_invoice корректно
 from bot.payment import create_invoice
 
 # Импорты хранилища
+from bot.storage import insert_product, delete_product
 from bot.storage import update_order, find_orders_by_user, get_order, add_order
 from bot.storage import get_all_stores, get_products_by_store, get_product_details_by_id
 from bot.db import execute_query
@@ -40,6 +42,212 @@ grinch_jokes = [
 
 # Создаём бота
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="HTML", threaded=False)
+# -------------------------
+# АДМИН-ПАНЕЛЬ
+# -------------------------
+
+# Словарь для хранения временных данных при создании товара
+admin_state = {}
+
+
+@bot.message_handler(commands=["admin"])
+def cmd_admin(message):
+    """Главное меню администратора."""
+    if message.from_user.id not in ADMIN_IDS:
+        return  # Игнорируем не-админов
+
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add(types.KeyboardButton("➕ Добавить товар"))
+    kb.add(types.KeyboardButton("❌ Удалить товар"))
+    kb.add(types.KeyboardButton("🔙 Выйти из админки"))
+
+    bot.send_message(message.chat.id, "👨‍💻 Админ-панель. Что делаем?", reply_markup=kb)
+
+
+@bot.message_handler(func=lambda m: m.text == "🔙 Выйти из админки")
+def admin_exit(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    # Возвращаем обычное меню пользователя
+    bot.send_message(message.chat.id, "Выход выполнен.", reply_markup=main_menu())
+
+
+# --- ЛОГИКА УДАЛЕНИЯ ТОВАРА ---
+
+
+@bot.message_handler(func=lambda m: m.text == "❌ Удалить товар")
+def admin_delete_start(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    # Показываем магазины
+    stores = get_all_stores()
+    markup = types.InlineKeyboardMarkup()
+    for store in stores:
+        markup.add(
+            types.InlineKeyboardButton(
+                store["title"], callback_data=f"adm_del_store_{store['store_id']}"
+            )
+        )
+
+    bot.send_message(
+        message.chat.id, "Выберите магазин, откуда удаляем:", reply_markup=markup
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("adm_del_store_"))
+def admin_delete_choose_product(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    store_id = call.data.split("_")[3]
+
+    products = get_products_by_store(store_id)
+    if not products:
+        return bot.send_message(call.message.chat.id, "В этом магазине нет товаров.")
+
+    markup = types.InlineKeyboardMarkup()
+    for p in products:
+        # Кнопка с крестиком для удаления
+        markup.add(
+            types.InlineKeyboardButton(
+                f"❌ {p['name']}", callback_data=f"adm_delete_{p['product_id']}"
+            )
+        )
+
+    bot.edit_message_text(
+        "Нажмите на товар, чтобы удалить его НАВСЕГДА:",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup,
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("adm_delete_"))
+def admin_delete_confirm(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    product_id = call.data.split("_")[2]
+
+    delete_product(product_id)
+    bot.answer_callback_query(call.id, "Товар удален!")
+    bot.edit_message_text(
+        "✅ Товар успешно удален.", call.message.chat.id, call.message.message_id
+    )
+
+
+# --- ЛОГИКА ДОБАВЛЕНИЯ ТОВАРА (Wizard) ---
+
+
+@bot.message_handler(func=lambda m: m.text == "➕ Добавить товар")
+def admin_add_start(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    # 1. Выбор магазина
+    stores = get_all_stores()
+    if not stores:
+        return bot.send_message(
+            message.chat.id, "Сначала создайте магазины в БД вручную или через SQL."
+        )
+
+    markup = types.InlineKeyboardMarkup()
+    for store in stores:
+        markup.add(
+            types.InlineKeyboardButton(
+                store["title"], callback_data=f"adm_add_store_{store['store_id']}"
+            )
+        )
+
+    bot.send_message(
+        message.chat.id, "1️⃣ В какой магазин добавляем товар?", reply_markup=markup
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("adm_add_store_"))
+def admin_add_step_name(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    store_id = call.data.split("_")[3]
+
+    # Сохраняем выбранный магазин
+    admin_state[call.from_user.id] = {"store_id": store_id}
+
+    msg = bot.send_message(
+        call.message.chat.id, "2️⃣ Введите **НАЗВАНИЕ** товара:", parse_mode="Markdown"
+    )
+    # Переход к следующему шагу
+    bot.register_next_step_handler(msg, process_name_step)
+
+
+def process_name_step(message):
+    try:
+        name = message.text
+        admin_state[message.from_user.id]["name"] = name
+
+        msg = bot.send_message(
+            message.chat.id,
+            "3️⃣ Введите **ЦЕНУ** в долларах (только число, например: `5.50`):",
+            parse_mode="Markdown",
+        )
+        bot.register_next_step_handler(msg, process_price_step)
+    except Exception as e:
+        bot.send_message(message.chat.id, "Ошибка. Попробуйте заново /admin")
+
+
+def process_price_step(message):
+    try:
+        price = float(message.text.replace(",", "."))
+        admin_state[message.from_user.id]["price"] = price
+
+        msg = bot.send_message(
+            message.chat.id,
+            "4️⃣ Введите **ОПИСАНИЕ/КЛАД** (Этот текст увидит клиент после оплаты):",
+        )
+        bot.register_next_step_handler(msg, process_delivery_step)
+    except ValueError:
+        msg = bot.send_message(
+            message.chat.id, "❌ Это не число. Введите цену еще раз (например: 10):"
+        )
+        bot.register_next_step_handler(msg, process_price_step)
+
+
+def process_delivery_step(message):
+    text = message.text
+    admin_state[message.from_user.id]["delivery_text"] = text
+
+    msg = bot.send_message(message.chat.id, "5️⃣ Отправьте **ФОТОГРАФИЮ** товара (одну):")
+    bot.register_next_step_handler(msg, process_photo_step)
+
+
+def process_photo_step(message):
+    if not message.photo:
+        msg = bot.send_message(message.chat.id, "❌ Это не фото. Отправьте фото:")
+        bot.register_next_step_handler(msg, process_photo_step)
+        return
+
+    # Берем ID самого качественного фото
+    file_id = message.photo[-1].file_id
+    admin_state[message.from_user.id]["file_id"] = file_id
+
+    # --- ФИНАЛ: СОХРАНЕНИЕ В БД ---
+    data = admin_state[message.from_user.id]
+
+    insert_product(
+        data["store_id"],
+        data["name"],
+        data["price"],
+        data["delivery_text"],
+        data["file_id"],  # Сохраняем ID фото, а не путь к файлу!
+    )
+
+    bot.send_message(
+        message.chat.id,
+        f"✅ **Товар добавлен!**\n\n" f"📦 {data['name']}\n" f"💰 {data['price']} $",
+        parse_mode="Markdown",
+    )
+
+    # Возвращаем в админку
+    cmd_admin(message)
 
 
 # -------------------------

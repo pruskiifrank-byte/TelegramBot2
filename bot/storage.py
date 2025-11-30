@@ -159,3 +159,18 @@ def find_orders_by_user(user_id: int):
                 "product_name": product_name,
             }
     return orders_dict
+
+
+def insert_product(store_id, name, price, delivery_text, file_path):
+    """Добавляет новый товар в БД."""
+    query = """
+    INSERT INTO products (store_id, name, price_usd, delivery_text, file_path)
+    VALUES (%s, %s, %s, %s, %s);
+    """
+    execute_query(query, (store_id, name, price, delivery_text, file_path))
+
+
+def delete_product(product_id):
+    """Удаляет товар из БД."""
+    query = "DELETE FROM products WHERE product_id = %s;"
+    execute_query(query, (product_id,))
