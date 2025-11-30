@@ -5,11 +5,10 @@ import psycopg2
 from decimal import Decimal
 
 # !!! ВАЖНО !!! ЗАМЕНИТЕ ЭТУ СТРОКУ ВАШЕЙ РЕАЛЬНОЙ СТРОКОЙ ПОДКЛЮЧЕНИЯ RENDER
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://bdshop_kwoz_user:t4fpnmrBVddy8NPuYS9akZHhX2pYtsep@dpg-d4llumodl3ps7388r6ag-a.frankfurt-postgres.render.com/bdshop_kwoz?sslmode=require",
-)
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
+if not DATABASE_URL:
+    raise ValueError("Не найдена переменная окружения DATABASE_URL. Проверьте настройки хостинга.")
 
 def get_connection():
     """Устанавливает и возвращает соединение с базой данных."""

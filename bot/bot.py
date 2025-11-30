@@ -358,13 +358,20 @@ def handle_address_selection(call):
 
     # 3. БРОНИРОВАНИЕ И СОЗДАНИЕ ИНВОЙСА
     # ИСПОЛЬЗУЕТСЯ НОВОЕ ЗНАЧЕНИЕ INITIAL_RESERVATION_HOURS = 1
-    reservation_expires_at = datetime.now() + timedelta(hours=INITIAL_RESERVATION_HOURS)
-
-    # --- ВРЕМЕННЫЙ КОД ДЛЯ OXAPAY: заменяем на реальный вызов ---
-    # invoice = create_invoice(price, product_name)
-    # payment_url = invoice['url']
-    payment_url = "https://oxapay.io/pay"
-    # --- КОНЕЦ ВРЕМЕННОГО КОДА ---
+    temp_order_id = f"ORD-{int(time.time())}-{uid}"
+    
+    # Создаем инвойс, используя временный ID
+    invoice_data = create_invoice(uid, price, temp_order_id)
+    
+    if not invoice_data:
+        # Ошибка создания инвойса
+        bot.answer_callback_query(call.id, "Ошибка создания платежа.", show_alert=True)
+        return bot.send_message(uid, "❌ Не удалось создать платежную ссылку. Попробуйте позже.")
+        
+    # Распаковываем кортеж (pay_url, track_id)
+    payment_url, track_id = invoice_data
+    
+    # --- КОНЕЦ ИСПРАВЛЕННОГО КОДА ---
 
     new_order_data = {
         "product_id": product_id,
@@ -372,12 +379,21 @@ def handle_address_selection(call):
         "price": price,
         "address": selected_address,
         "status": "waiting_payment",
-        "payment_url": payment_url,
+        "payment_url": payment_url, # <--- ИСПРАВЛЕНО
+        "oxapay_track_id": track_id, # <--- ИСПРАВЛЕНО
         "reservation_expires_at": reservation_expires_at.timestamp(),
-        "is_reserved": True,
+        "is_reserved": True, # Этого поля нет в БД, оно не будет сохранено
     }
 
-    order_id = add_order(uid, new_order_data)
+    order_id = add_order(
+        uid, 
+        product_id, 
+        price, 
+        selected_address, 
+        temp_order_id, # Используем временный ID, который был передан в OxaPay
+        track_id, 
+        payment_url
+    )
 
     # 4. ОТПРАВКА ПОДТВЕРЖДЕНИЯ С ФОТОГРАФИЕЙ
     caption_text = (

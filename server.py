@@ -41,15 +41,51 @@ except ImportError as e:
         return {"user_id": 123456789, "delivery_status": "pending"}
 
 
-# ЗАГЛУШКА ДЛЯ ФУНКЦИИ ВЫДАЧИ ТОВАРА
-# !!! ВАЖНО: ЗАМЕНИТЕ ЭТУ ЗАГЛУШКУ НА РЕАЛЬНЫЙ ИМПОРТ ИЛИ РЕАЛЬНУЮ ФУНКЦИЮ !!!
+# ----------------------------------------------------------------------
+# РЕАЛИЗОВАННАЯ ФУНКЦИЯ ВЫДАЧИ ТОВАРА
+# ----------------------------------------------------------------------
 def give_product(user_id, order_id):
-    """(ЗАГЛУШКА) Здесь должна быть логика отправки адреса/фото клиенту."""
-    print(f"[DELIVERY] Giving product for Order ID: {order_id} to User ID: {user_id}")
-    # Здесь нужно вызвать bot.send_message или bot.send_photo
-    # и обновить 'delivery_status' в БД на 'delivered'
-    # update_order(order_id, delivery_status='delivered')
-    return True
+    """
+    Отправляет адрес/фото клиенту после успешной оплаты.
+    """
+    order_data = get_order(order_id)
+    if not order_data:
+        print(f"[DELIVERY] ERROR: Order ID {order_id} not found for delivery.")
+        return False
+
+    product_data = get_product_details_by_id(order_data["product_id"])
+
+    if not product_data:
+        print(f"[DELIVERY] ERROR: Product ID {order_data['product_id']} not found.")
+        # Обновляем статус, чтобы не пытаться выдать снова
+        update_order(order_id, delivery_status="error")
+        return False
+
+    # Получаем текст выдачи
+    delivery_text = product_data.get(
+        "delivery_text", "Данные для получения отсутствуют."
+    )
+
+    caption_text = (
+        f"✅ **Оплата заказа №{order_id} подтверждена!**\n\n"
+        f"**Товар:** {product_data.get('product_name')}\n\n"
+        f"**ИНСТРУКЦИЯ КЛАДА:**\n{delivery_text}"  # delivery_text из init_db.py
+    )
+
+    try:
+        # Отправляем сообщение с данными
+        bot.send_message(user_id, caption_text, parse_mode="Markdown")
+
+        # Обновляем 'delivery_status' в БД
+        update_order(order_id, delivery_status="delivered")
+        print(
+            f"[DELIVERY] Successfully delivered Order ID: {order_id} to User ID: {user_id}"
+        )
+        return True
+    except Exception as e:
+        print(f"[DELIVERY] FATAL ERROR during delivery for Order ID {order_id}: {e}")
+        update_order(order_id, delivery_status="failed")
+        return False
 
 
 # ----------------------------------------------------------------------
@@ -127,5 +163,4 @@ def oxapay_ipn():
 
 if __name__ == "__main__":
     # Локальный запуск
-    # PORT для Render обычно задается через ENV, 5000 - дефолтный
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
