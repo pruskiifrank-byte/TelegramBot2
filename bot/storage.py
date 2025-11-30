@@ -4,7 +4,6 @@ from .db import execute_query
 import time
 from decimal import Decimal
 
-
 def get_all_stores():
     """Получает все магазины для главного меню."""
     query = "SELECT store_id, title FROM stores ORDER BY store_id;"
@@ -16,7 +15,6 @@ def get_all_stores():
             stores_list.append({"store_id": row[0], "title": row[1]})
     return stores_list
 
-
 def get_products_by_store(store_id):
     """Получает все товары для выбранного магазина."""
     query = "SELECT product_id, name, price_usd FROM products WHERE store_id = %s ORDER BY price_usd;"
@@ -25,17 +23,12 @@ def get_products_by_store(store_id):
     if results:
         for row in results:
             # product_id, name, price_usd
-            products_list.append(
-                {
-                    "product_id": row[0],
-                    "name": row[1],
-                    "price_usd": (
-                        float(row[2]) if isinstance(row[2], Decimal) else float(row[2])
-                    ),
-                }
-            )
+            products_list.append({
+                "product_id": row[0], 
+                "name": row[1], 
+                "price_usd": float(row[2])
+            })
     return products_list
-
 
 def get_product_details_by_id(product_id):
     """Получает полные детали товара (для создания заказа) по его ID."""
@@ -45,21 +38,18 @@ def get_product_details_by_id(product_id):
         row = result[0]
         # price_usd, file_path, delivery_text, name, title (магазина)
         return {
-            "price_usd": (
-                float(row[0]) if isinstance(row[0], Decimal) else float(row[0])
-            ),
+            "price_usd": float(row[0]),
             "file_path": row[1],
             "delivery_text": row[2],
             "product_name": row[3],
-            "shop_title": row[4],
+            "shop_title": row[4]
         }
     return None
-
 
 def add_order(user_id: int, product_id: int, price_usd: float):
     """Добавляет новый заказ в БД."""
     order_id = f"ORD-{int(time.time())}-{user_id}"
-
+    
     query = """
     INSERT INTO orders (order_id, user_id, product_id, price_usd)
     VALUES (%s, %s, %s, %s);
@@ -67,51 +57,37 @@ def add_order(user_id: int, product_id: int, price_usd: float):
     execute_query(query, (order_id, user_id, product_id, price_usd))
     return order_id
 
-
 def update_order(order_id: str, **kwargs):
     """Обновляет статус или детали заказа в БД."""
     if not kwargs:
         return
-
+    
     set_clauses = []
     params = []
-
+    
     for key, value in kwargs.items():
         set_clauses.append(f"{key} = %s")
         params.append(value)
-
+    
     params.append(order_id)
-
+    
     query = f"UPDATE orders SET {', '.join(set_clauses)} WHERE order_id = %s;"
     execute_query(query, tuple(params))
-
 
 def get_order(order_id: str):
     """Получает детали заказа по ID."""
     query = "SELECT * FROM orders WHERE order_id = %s;"
     result = execute_query(query, (order_id,), fetch=True)
-
+    
     if result:
-        cols = [
-            "order_id",
-            "user_id",
-            "product_id",
-            "pickup_address",
-            "price_usd",
-            "status",
-            "delivery_status",
-            "oxapay_track_id",
-            "payment_url",
-            "created_at",
-            "paid_at",
-        ]
+        cols = ['order_id', 'user_id', 'product_id', 'pickup_address', 'price_usd', 
+                'status', 'delivery_status', 'oxapay_track_id', 'payment_url', 'created_at', 'paid_at']
         order_data = dict(zip(cols, result[0]))
-        if "price_usd" in order_data and isinstance(order_data["price_usd"], Decimal):
-            order_data["price_usd"] = float(order_data["price_usd"])
-
+        if 'price_usd' in order_data:
+            order_data['price_usd'] = float(order_data['price_usd'])
+            
         return order_data
     return None
-
 
 def find_orders_by_user(user_id: int):
     """Ищет все заказы пользователя."""
@@ -127,14 +103,14 @@ def find_orders_by_user(user_id: int):
     ORDER BY o.created_at DESC;
     """
     results = execute_query(query, (user_id,), fetch=True)
-
+    
     orders_dict = {}
     if results:
         for row in results:
             oid, status, price, product_name = row
             orders_dict[oid] = {
-                "status": status,
-                "price": float(price) if isinstance(price, Decimal) else float(price),
-                "product_name": product_name,
+                "status": status, 
+                "price": float(price), 
+                "product_name": product_name
             }
     return orders_dict

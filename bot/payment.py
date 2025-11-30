@@ -1,19 +1,20 @@
+# bot/payment.py
 import requests
 import json
 import time
 from bot.config import OXAPAY_API_KEY, BASE_URL
 
-# Импортируем функции управления хранилищем, а не просто словарь
-from bot.storage import add_order, update_order
+# Импортируем только функции, работающие с БД, и get_order для колбэков
+from bot.storage import add_order, update_order, get_order
 
 OXAPAY_INVOICE_URL = "https://api.oxapay.com/v1/payment/invoice"
 
 
-def create_invoice(user_id, amount_usd, file_path):
+def create_invoice(user_id, amount_usd, order_id):
     """
-    Создание инвойса OxaPay v1
-    """ 
-    order_id = f"ORD-{int(time.time())}"
+    Создание инвойса OxaPay v1.
+    order_id должен быть создан и передан из bot.py.
+    """
 
     headers = {"merchant_api_key": OXAPAY_API_KEY, "Content-Type": "application/json"}
 
@@ -35,7 +36,6 @@ def create_invoice(user_id, amount_usd, file_path):
         "sandbox": False,
     }
 
-    # ВАЖНО: json=data вместо data=json.dumps
     try:
         response = requests.post(OXAPAY_INVOICE_URL, json=data, headers=headers)
         result = response.json()
@@ -49,18 +49,10 @@ def create_invoice(user_id, amount_usd, file_path):
 
     payment_data = result["data"]
     pay_url = payment_data["payment_url"]
+    track_id = payment_data["track_id"]
 
-    # ВАЖНО: Используем add_order для сохранения на диск
-    new_order_data = {
-        "user_id": user_id,
-        "file": file_path,
-        "status": "pending",
-        "track_id": payment_data["track_id"],
-        "price": amount_usd,  # Сохраняем цену сразу
-    }
-    add_order(order_id, new_order_data)
-
-    return order_id, pay_url
+    # Теперь мы только возвращаем данные для обновления записи в БД в bot.py
+    return pay_url, track_id
 
 
 def handle_oxapay_callback(data):
@@ -72,10 +64,15 @@ def handle_oxapay_callback(data):
     status = data.get("status")  # "paid", "confirmed", etc
     amount = data.get("amount")
 
-    if not order_id or order_id not in orders:
+    # 1. Проверяем существование заказа в БД
+    existing_order = get_order(order_id)
+
+    if not order_id or not existing_order:
+        print(f"Callback error: Order ID {order_id} not found.")
         return False
 
-    # ВАЖНО: Используем update_order для сохранения на диск
-    update_order(order_id, status=status, paid_amount=amount, track_id=track_id)
+    # 2. Обновляем статус заказа в БД
+    update_order(order_id, status=status)
 
+    # NOTE: В server.py мы вызываем give_product
     return True

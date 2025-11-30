@@ -12,7 +12,6 @@ from bot.db import execute_query
 # -------------------------
 # Константы и состояние
 # -------------------------
-# СЛОВАРЬ SHOPS УДАЛЕН - ВСЕ БЕРЕТСЯ ИЗ БД
 ADDRESSES = ["Бульвар Шевченко", "Ул. Победы", "Проспект Мира"]
 user_state = {}
 
@@ -20,7 +19,7 @@ user_state = {}
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="HTML", threaded=False)
 
 # -------------------------
-# Клавиатуры и команды... (без изменений)
+# Клавиатуры и команды
 # -------------------------
 
 
@@ -56,7 +55,6 @@ def handle_buy_button(message):
     # 2. Формируем кнопки
     markup = types.InlineKeyboardMarkup()
     for store in stores:
-        # data: 'store_1' (используем ID)
         markup.add(
             types.InlineKeyboardButton(
                 store["title"], callback_data=f"store_{store['store_id']}"
@@ -67,7 +65,7 @@ def handle_buy_button(message):
 
 
 # -------------------------
-# ЭТАП 2: Выбор магазина (store_id -> Товары)
+# ЭТАП 2: Выбор магазина
 # -------------------------
 @bot.callback_query_handler(func=lambda call: call.data.startswith("store_"))
 def handle_store_selection(call):
@@ -87,7 +85,7 @@ def handle_store_selection(call):
             chat_id=uid,
             message_id=call.message.message_id,
             text="В этом магазине пока нет товаров.",
-            reply_markup=back_to_main_menu(),
+            reply_markup=None,
         )
 
     # 2. Формируем кнопки с ценами
@@ -95,7 +93,6 @@ def handle_store_selection(call):
     text = "Выберите товар в этом магазине:"
 
     for product in products:
-        # data: 'product_12'
         button_text = f"{product['name']} ({product['price_usd']:.2f}$)"
         markup.add(
             types.InlineKeyboardButton(
@@ -110,7 +107,7 @@ def handle_store_selection(call):
 
 
 # -------------------------
-# ЭТАП 3: Выбор товара (product_id -> Адреса)
+# ЭТАП 3: Выбор товара
 # -------------------------
 @bot.callback_query_handler(func=lambda call: call.data.startswith("product_"))
 def handle_product_selection(call):
@@ -128,7 +125,6 @@ def handle_product_selection(call):
     # 2. Создаем Inline-кнопки для адресов
     markup = types.InlineKeyboardMarkup()
     for addr in ADDRESSES:
-        # data: 'addr_12_Бульвар Шевченко'
         markup.add(
             types.InlineKeyboardButton(addr, callback_data=f"addr_{product_id}_{addr}")
         )
@@ -158,7 +154,6 @@ def handle_address_selection(call):
         return bot.send_message(uid, "Ошибка при обработке адреса.")
 
     # 2. ПОЛУЧЕНИЕ ДЕТАЛЕЙ ТОВАРА ИЗ БД
-    # Получаем цену, имя товара и название магазина
     details = get_product_details_by_id(product_id)
     if not details:
         return bot.send_message(uid, "Ошибка: Товар не найден в каталоге.")
@@ -167,8 +162,10 @@ def handle_address_selection(call):
     product_name = details["product_name"]
     shop_title = details["shop_title"]
 
-    # 3. Создаем заказ в БД и инвойс OxaPay
+    # 3. Создаем заказ в БД
     order_id = add_order(uid, product_id, price)
+
+    # 4. Создаем инвойс OxaPay
     resp = create_invoice(uid, price, order_id)
 
     if not resp or len(resp) != 2:
@@ -181,7 +178,7 @@ def handle_address_selection(call):
 
     pay_url, track_id = resp
 
-    # 4. Дополняем заказ деталями в БД
+    # 5. Дополняем заказ деталями в БД
     update_order(
         order_id,
         pickup_address=address,
@@ -190,7 +187,7 @@ def handle_address_selection(call):
         oxapay_track_id=track_id,
     )
 
-    # 5. Отправляем сообщение с кнопкой оплаты (Inline-кнопка)
+    # 6. Отправляем сообщение с кнопкой оплаты
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("💳 Оплатить", url=pay_url))
 
@@ -208,7 +205,7 @@ def handle_address_selection(call):
         parse_mode="Markdown",
         reply_markup=markup,
     )
-    # 6. Очищаем состояние
+    # 7. Очищаем состояние
     user_state.pop(uid, None)
 
 
@@ -255,3 +252,37 @@ def give_product(user_id, order_id):
     except Exception as e:
         print(f"Error giving product for order {order_id}: {e}")
         return False
+
+
+# -------------------------
+# Хендлер "Мои заказы" (добавлен для полноты)
+# -------------------------
+
+
+@bot.message_handler(func=lambda m: m.text == "📦 Мои заказы")
+def handle_my_orders(message):
+    uid = message.chat.id
+    orders = find_orders_by_user(uid)
+
+    if not orders:
+        return bot.send_message(uid, "У вас пока нет активных заказов.")
+
+    text = "История ваших заказов:\n"
+    for order_id, data in orders.items():
+        # Преобразуем статус из БД в читаемый вид
+        status_display = {
+            "pending": "⏳ Ожидает оплаты",
+            "waiting_payment": "⏳ Ожидает оплаты",
+            "paid": "✅ Оплачен",
+            "delivered": "📦 Выдан",
+            "error": "❌ Ошибка",
+        }.get(data["status"], data["status"])
+
+        text += (
+            f"\n`{order_id}`\n"
+            f"  Товар: {data['product_name']}\n"
+            f"  Цена: {data['price']:.2f}$\n"
+            f"  Статус: **{status_display}**"
+        )   
+
+    bot.send_message(uid, text, parse_mode="Markdown")

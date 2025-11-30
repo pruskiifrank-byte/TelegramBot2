@@ -1,18 +1,15 @@
 # server.py
-import os
+
 from flask import Flask, request, abort
 import telebot
-from bot.config import TELEGRAM_TOKEN
-from bot.bot import bot, give_product
-from bot.storage import update_order, get_order
+import os
 import time
 
-# ... (Инициализация app)
-
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-
-if not TELEGRAM_TOKEN:
-    raise ValueError("TELEGRAM_TOKEN не установлен")
+# Импорт из вашей внутренней логики
+from bot.config import TELEGRAM_TOKEN
+from bot.bot import bot, give_product
+from bot.payment import handle_oxapay_callback
+from bot.storage import update_order, get_order
 
 app = Flask(__name__)
 
@@ -20,7 +17,6 @@ app = Flask(__name__)
 # --- Telegram Webhook ---
 @app.route(f"/webhook/{TELEGRAM_TOKEN}", methods=["POST"])
 def telegram_webhook():
-
     if request.headers.get("content-type") == "application/json":
         json_str = request.get_data().decode("UTF-8")
         update = telebot.types.Update.de_json(json_str)
@@ -30,41 +26,40 @@ def telegram_webhook():
         abort(403)
 
 
-# --- OxaPay Webhook ---
+# --- OxaPay IPN (Callback) ---
 @app.route("/oxapay/ipn", methods=["POST"])
 def oxapay_ipn():
-    data = request.get_json(silent=True)
-    if not data:
-        abort(400)
+    """Обработчик входящих уведомлений об оплате от OxaPay."""
+    if request.headers.get("content-type") == "application/json":
+        data = request.get_json()
+        order_id = data.get("order_id")
+        status = data.get("status")
 
-    order_id = data.get("order_id")
-    status = data.get("status")  # 'paid', 'canceled' и т.д.
+        # 1. Обработка колбэка (обновление статуса в БД)
+        if not handle_oxapay_callback(data):
+            # Если заказ не найден или обработка с ошибкой
+            return "Order not found or processing error", 400
 
-    if not order_id or not status:
-        return "MISSING DATA", 400
+        # 2. Проверка статуса и выдача товара
+        if status == "paid" and order_id:
+            order_data = get_order(order_id)
+            user_id = order_data.get("user_id")
 
-    # 1. Обновляем статус заказа в БД
-    if status == "paid":
-        # Используем update_order для установки статуса и времени оплаты
-        update_order(
-            order_id, status="paid", paid_at=time.strftime("%Y-%m-%d %H:%M:%S")
-        )
-    elif status == "canceled":
-        update_order(order_id, status="canceled")
-    # Добавьте другие статусы, если OxaPay их присылает
+            # Выдаем товар, только если статус доставки еще pending (предотвращаем дублирование выдачи)
+            if order_data.get("delivery_status") == "pending":
+                give_product(user_id, order_id)
 
-    # 2. Выдача товара, если оплачено
-    if status == "paid":
-        order = get_order(order_id)
-        if (
-            order
-            and order.get("user_id")
-            and order.get("delivery_status") != "delivered"
-        ):
-            # Выдача товара, которая теперь отправляет фото тайника
-            give_product(order["user_id"], order_id)
+            return "OK", 200
 
-    return "OK", 200
+        return "OK", 200
+    else:
+        abort(403)
 
 
-# ... (остальной код, если есть)
+if __name__ == "__main__":
+    # Если запускаете локально для тестирования
+    # BASE_URL должен быть вашим ngrok или другим туннелем
+    # bot.remove_webhook()
+    # time.sleep(0.1)
+    # bot.set_webhook(url=f"{BASE_URL}/webhook/{TELEGRAM_TOKEN}")
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))

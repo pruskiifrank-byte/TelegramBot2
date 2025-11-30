@@ -1,7 +1,7 @@
 # init_db.py
 from bot.db import execute_query
 
-# Используем полный каталог для инициализации БД
+# Полный каталог для инициализации БД
 CATALOG = {
     "fruits": {
         "title": "🍌 Scooby-Doo — Фрукты",
@@ -32,7 +32,7 @@ CATALOG = {
             {
                 "name": "Набор овощей (Лето)",
                 "file": "bot/images/vegs_s.jpg",
-                "price": 2.00,
+                "price": 3.00,
                 "delivery_text": "📍 На крыше парковки, в вентиляции. Код: VEGS3.",
             },
         ],
@@ -45,6 +45,23 @@ CATALOG = {
                 "file": "bot/images/meat.jpg",
                 "price": 12.00,
                 "delivery_text": "📍 Под старым дубом, в синем контейнере. Код: MEAT3.",
+            },
+        ],
+    },
+    "drinks": {
+        "title": "🥤 Refresh — Напитки",
+        "products": [
+            {
+                "name": "Энергетик 'Турбо'",
+                "file": "bot/images/drinks/turbo.jpg",
+                "price": 3.50,
+                "delivery_text": "📍 Под лавочкой в парке, рядом с третьим деревом. Код: DRK1.",
+            },
+            {
+                "name": "Кола (1.5 л)",
+                "file": "bot/images/drinks/cola.jpg",
+                "price": 2.00,
+                "delivery_text": "📍 В мусорном баке возле почты, под картоном. Код: DRK2.",
             },
         ],
     },
@@ -109,32 +126,41 @@ def populate_products():
 
     # Заполнение stores
     for key, data in CATALOG.items():
+        print(f"Попытка вставить магазин: {data['title']}")
         insert_store = (
             "INSERT INTO stores (shop_key, title) VALUES (%s, %s) RETURNING store_id;"
         )
         result = execute_query(insert_store, (key, data["title"]), fetch=True)
+
         store_id = result[0][0] if result else None
 
-        if store_id:
-            # Заполнение products
-            for product in data["products"]:
-                insert_product = """
-                INSERT INTO products (store_id, name, price_usd, delivery_text, file_path)
-                VALUES (%s, %s, %s, %s, %s);
-                """
-                params = (
-                    store_id,
-                    product["name"],
-                    product["price"],
-                    product["delivery_text"],
-                    product["file"],
-                )
-                execute_query(insert_product, params)
-                print(f"Добавлен товар: {product['name']} (Магазин ID: {store_id})")
+        if not store_id:
+            print(
+                f"❌ ОШИБКА: Не удалось получить store_id для {data['title']}. Проверьте подключение/запрос!"
+            )
+            continue
+
+        print(f"✅ Магазин '{data['title']}' добавлен с ID: {store_id}")
+
+        # Заполнение products
+        for product in data["products"]:
+            insert_product = """
+            INSERT INTO products (store_id, name, price_usd, delivery_text, file_path)
+            VALUES (%s, %s, %s, %s, %s);
+            """
+            params = (
+                store_id,
+                product["name"],
+                product["price"],
+                product["delivery_text"],
+                product["file"],
+            )
+            execute_query(insert_product, params)
+            print(f"Добавлен товар: {product['name']}")
 
 
 if __name__ == "__main__":
-    from bot.db import execute_query  # повторный импорт на всякий случай
+    from bot.db import execute_query
 
     create_tables()
     populate_products()
