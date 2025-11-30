@@ -43,22 +43,45 @@ def give_product(user_id, order_id):
     prod = get_product_details_by_id(order["product_id"])
     if not prod:
         return False
-
-    text = f"✅ <b>Оплата прошла!</b>\nТовар: {prod['product_name']}\n\n📍 <b>КЛАД:</b>\n{prod['delivery_text']}"
+    text = (
+        f"✅ <b>Оплата прошла успешно!</b>\n"
+        f"📦 Товар: <b>{prod['product_name']}</b>\n\n"
+        f"📍 <b>ВАШ КЛАД:</b>\n{prod['delivery_text']}\n\n"
+        f"—————————————\n"
+        f"Спасибо за покупку \n"
+        f"быстрого подъёма и мягкого покура🥰\n\n"
+        f"Отзывы довольных клиентов⤵️\n"
+        f"https://t.me/+NW9rf1wPSl5lZmM6\n\n"
+        f"Резервы в случае блокировки ⤵️⤵️⤵️\n"
+        f"@scooby_doorezerv1\n"
+        f"@scooby_doorezerv2\n"
+        f"@scoobbyy_doo\n\n"
+        f"Это все актуальные линки \n"
+        f"Остальное скам-мошенники\n"
+        f"—————————————"
+    )
 
     try:
-        # Отправляем фото по ID
+        # Отправляем фото по ID (prod['file_path'] хранит file_id)
         bot.send_photo(user_id, prod["file_path"], caption=text, parse_mode="HTML")
+
+        # Обновляем статус заказа
         update_order(order_id, delivery_status="delivered")
-        mark_product_as_sold(order["product_id"])  # УБИРАЕМ ТОВАР С ВИТРИНЫ
+
+        # Помечаем товар как проданный (удаляем с витрины)
+        mark_product_as_sold(order["product_id"])
+
         return True
     except telebot.apihelper.ApiTelegramException as e:
         # Если бот в блоке, шлем админу
         for adm in ADMIN_IDS:
-            bot.send_message(
-                adm,
-                f"🆘 АВАРИЯ! Клиент {user_id} оплатил, но заблокировал бота!\nOrder: {order_id}",
-            )
+            try:
+                bot.send_message(
+                    adm,
+                    f"🆘 АВАРИЯ! Клиент {user_id} оплатил, но заблокировал бота!\nOrder: {order_id}",
+                )
+            except:
+                pass
         return False
     except Exception as e:
         print(f"Delivery Error: {e}")
