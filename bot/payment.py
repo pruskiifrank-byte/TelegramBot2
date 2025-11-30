@@ -1,57 +1,94 @@
 # bot/payment.py
 import requests
+import json
 from bot.config import OXAPAY_API_KEY, BASE_URL
 
 # Нам нужно обновлять базу при колбэке, поэтому импортируем update_order
 from bot.storage import update_order
 
-OXAPAY_INVOICE_URL = "https://api.oxapay.com/v1/payment/invoice"
-OXAPAY_STATUS_URL = "https://api.oxapay.com/v1/payment/status"
+# Ссылка для СОЗДАНИЯ счета (стандартный Merchant API)
+OXAPAY_CREATE_URL = "https://api.oxapay.com/merchant/request"
+
+# Ссылка для ПРОВЕРКИ счета (из вашей документации)
+OXAPAY_HISTORY_URL = "https://api.oxapay.com/v1/payment"
 
 
 def create_invoice(user_id, amount_usd, order_id):
-    """Создание ссылки на оплату."""
-    headers = {"merchant_api_key": OXAPAY_API_KEY, "Content-Type": "application/json"}
+    """
+    Создание ссылки на оплату через Merchant API.
+    """
+    # Для создания платежа данные отправляются в JSON (POST)
     data = {
+        "merchant": OXAPAY_API_KEY,  # В этом эндпоинте ключ передается в теле как "merchant"
         "amount": amount_usd,
         "currency": "USD",
-        "lifetime": 60,
-        "fee_paid_by_payer": 1,
-        "under_paid_coverage": 5,
-        "to_currency": "USDT",
-        "callback_url": f"{BASE_URL}/oxapay/ipn",
+        "lifeTime": 60,  # Обратите внимание: CamelCase (lifeTime)
+        "feePaidByPayer": 1,  # CamelCase
+        "underPaidCover": 5,  # CamelCase
+        "toCurrency": "USDT",  # CamelCase
+        "callbackUrl": f"{BASE_URL}/oxapay/ipn",
+        "returnUrl": f"https://t.me/MrGrinchShopZp_Bot",  # Ссылка возврата в бота
         "description": f"Order {order_id}",
-        "order_id": order_id,
+        "orderId": order_id,
     }
+
     try:
-        response = requests.post(
-            OXAPAY_INVOICE_URL, json=data, headers=headers, timeout=10
-        )
+        response = requests.post(OXAPAY_CREATE_URL, json=data, timeout=15)
         result = response.json()
+
+        # В Merchant API успешный код "result": 100
         if result.get("result") == 100:
-            return result["data"]["payment_url"], result["data"]["track_id"]
+            return result.get("payLink"), result.get("trackId")
+        else:
+            print(f"OxaPay Create Error (API response): {result}")
+
     except Exception as e:
-        print(f"OxaPay Create Error: {e}")
+        print(f"OxaPay Create Error (Exception): {e}")
+
     return None
 
 
 def verify_payment_via_api(track_id):
     """
-    Проверяет реальный статус заказа через API OxaPay.
-    Возвращает True, если заказ оплачен.
+    Проверяет статус заказа, используя метод Payment History (из вашей документации).
     """
     if not track_id:
         return False
 
-    data = {"merchant_api_key": OXAPAY_API_KEY, "track_id": track_id}
+    # Согласно вашей документации:
+    # Метод: GET
+    # Параметры: merchant_api_key, track_id
+
+    headers = {"merchant_api_key": OXAPAY_API_KEY, "Content-Type": "application/json"}
+
+    params = {"track_id": track_id}
+
     try:
-        response = requests.post(OXAPAY_STATUS_URL, json=data, timeout=10)
+        # Делаем GET запрос, как в документации
+        response = requests.get(
+            OXAPAY_HISTORY_URL, params=params, headers=headers, timeout=15
+        )
         res_json = response.json()
 
-        if res_json.get("result") == 100:
-            status = res_json.get("data", {}).get("status", "").lower()
-            if status in ["paid", "confirmed", "complete"]:
-                return True
+        # Анализируем ответ
+        # Структура: {"status": 200, "data": {"list": [...]}}
+        if res_json.get("status") == 200 and "data" in res_json:
+            payments_list = res_json["data"].get("list", [])
+
+            if payments_list:
+                # Берем первый найденный платеж (так как мы искали по уникальному track_id)
+                payment = payments_list[0]
+                status = payment.get("status", "").lower()
+
+                # Проверяем статус
+                # Возможные значения из доков: Paying, Paid (и другие)
+                if status in ["paid", "confirmed", "complete"]:
+                    return True
+                elif status == "paying":
+                    print(f"Payment {track_id} is still in Paying status.")
+            else:
+                print(f"Payment {track_id} not found in history.")
+
     except Exception as e:
         print(f"API Check Error: {e}")
 
@@ -60,12 +97,13 @@ def verify_payment_via_api(track_id):
 
 def handle_oxapay_callback(data):
     """
-    Обрабатывает данные от OxaPay и обновляет статус в БД.
+    Обрабатывает данные от OxaPay (Webhook) и обновляет статус в БД.
     """
     try:
-        order_id = data.get("order_id")
+        # В вебхуке ключи могут приходить немного по-другому, проверяем
+        order_id = data.get("order_id") or data.get("orderId")
         status = data.get("status")
-        track_id = data.get("track_id")
+        track_id = data.get("track_id") or data.get("trackId")
 
         if not order_id:
             return False
