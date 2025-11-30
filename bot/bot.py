@@ -13,7 +13,7 @@ from bot.storage import get_all_stores, get_products_by_store, get_product_detai
 from bot.db import execute_query
 
 # ЗАГЛУШКИ ДЛЯ ТЕСТИРОВАНИЯ (Замените на ваши реальные импорты)
-TELEGRAM_TOKEN = "TELEGRAM_TOKEN"
+TELEGRAM_TOKEN = "8211248581:AAHxBU1kzqiSQrNZMRzpFRoOaEfCA9ecclg"
 
 
 def update_order(*args, **kwargs):
