@@ -11,27 +11,10 @@ from bot.storage import (
     get_product_details_by_id,
     mark_product_as_sold,
 )
-from bot.payment import handle_oxapay_callback
+from bot.payment import handle_oxapay_callback, verify_payment_via_api
 
 
 app = Flask(__name__)
-
-
-# --- БЕЗОПАСНОСТЬ: Проверка через API OxaPay ---
-def verify_payment_via_api(track_id):
-    url = "https://api.oxapay.com/v1/payment/status"
-    data = {"merchant_api_key": OXAPAY_API_KEY, "track_id": track_id}
-    try:
-        r = requests.post(url, json=data, timeout=10).json()
-        if r.get("result") == 100 and r.get("data", {}).get("status") in [
-            "Paid",
-            "Confirmed",
-            "paid",
-        ]:
-            return True
-    except Exception as e:
-        print(f"API Check Error: {e}")
-    return False
 
 
 # --- ВЫДАЧА ТОВАРА ---

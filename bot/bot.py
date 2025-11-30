@@ -4,19 +4,21 @@ from telebot import types
 import time
 import math
 from bot.config import TELEGRAM_TOKEN, ADMIN_IDS
-from bot.payment import create_invoice
+from bot.payment import create_invoice, verify_payment_via_api
 from bot.storage import (
-    get_all_stores, 
-    get_products_by_store, 
+    get_all_stores,
+    get_products_by_store,
     get_product_details_by_id,
-    add_order, 
-    find_orders_by_user, 
-    insert_product, 
+    add_order,
+    find_orders_by_user,
+    insert_product,
     delete_product,
-    upsert_user, 
-    get_all_users, 
+    upsert_user,
+    get_all_users,
     update_product_field,
-    get_order  
+    get_order,
+    mark_product_as_sold,
+    update_order,
 )
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="HTML", threaded=False)
@@ -204,24 +206,49 @@ def handle_prod_selection(call):
 
 # --- МОИ ЗАКАЗЫ ---
 @bot.message_handler(func=lambda m: m.text == "📦 Мои заказы")
+@anti_flood
 def my_orders(message):
     orders = find_orders_by_user(message.chat.id)
     if not orders:
-        return bot.send_message(message.chat.id, "📭 История заказов пуста.")
+        return bot.send_message(message.chat.id, "📭 У вас пока нет заказов.")
 
-    text = "📦 <b>Ваши последние 5 заказов:</b>\n\n"
+    text = "📦 <b>ВАШИ ПОСЛЕДНИЕ ЗАКАЗЫ:</b>\n\n"
+
+    # Отправляем каждый заказ отдельным сообщением или блоком с кнопкой
+    # Для удобства сделаем список с инлайн-кнопками под сообщением, если заказов немного
+    # Но проще сделать так:
+
     for i, (oid, data) in enumerate(orders.items()):
         if i >= 5:
             break
-        icon = "⏳"
-        if data["status"] == "paid":
-            icon = "✅"
+
+        status_text = "❌ Ошибка"
+        kb = types.InlineKeyboardMarkup()
+
         if data["delivery_status"] == "delivered":
-            icon = "🎁"
+            status_text = "🎁 ВЫДАН"
+        elif data["status"] == "paid":
+            status_text = "✅ ОПЛАЧЕН (Выдача...)"
+        elif data["status"] == "waiting_payment":
+            status_text = "⏳ ОЖИДАЕТ ОПЛАТЫ"
+            # Кнопка проверки оплаты
+            kb.add(
+                types.InlineKeyboardButton(
+                    "🔄 Проверить оплату / Получить", callback_data=f"check_{oid}"
+                )
+            )
+            kb.add(
+                types.InlineKeyboardButton(
+                    "💳 Ссылка на оплату", url=data["payment_url"]
+                )
+            )
 
-        text += f"{icon} <b>{data['product_name']}</b>\n└ {data['price']}$ | <code>{oid}</code>\n\n"
-
-    bot.send_message(message.chat.id, text)
+        msg_text = (
+            f"🛒 <b>{data['product_name']}</b>\n"
+            f"🆔 <code>{oid}</code> | 💰 {data['price']} $\n"
+            f"Статус: {status_text}"
+        )
+        bot.send_message(message.chat.id, msg_text, reply_markup=kb, parse_mode="HTML")
 
 
 # ==========================================
@@ -236,6 +263,7 @@ def admin_panel(message):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("➕ Добавить товар", "✏️ Изменить товар")
     kb.add("❌ Удалить товар", "📢 Рассылка")
+    kb.add("🎁 Выдать товар")
     kb.add("🔙 Меню")
     bot.send_message(message.chat.id, "👨‍💻 Админка v2.0", reply_markup=kb)
 
@@ -505,48 +533,52 @@ def aadd_fin(m):
 
 @bot.message_handler(func=lambda m: m.text == "📦 Мои заказы")
 @anti_flood
+@bot.message_handler(func=lambda m: m.text == "📦 Мои заказы")
+@anti_flood
 def my_orders(message):
-    uid = message.chat.id
-    # Получаем последние 10 заказов
-    orders = find_orders_by_user(uid)
+    orders = find_orders_by_user(message.chat.id)
 
     if not orders:
-        return bot.send_message(uid, "📭 У вас пока нет заказов.")
+        return bot.send_message(message.chat.id, "📭 У вас пока нет заказов.")
 
-    kb = types.InlineKeyboardMarkup()
-    text = (
-        "📦 **Ваши последние покупки:**\n(Нажмите на товар, чтобы получить данные)\n\n"
-    )
+    text = "📦 <b>ВАШИ ПОСЛЕДНИЕ ЗАКАЗЫ:</b>\n\n"
 
-    count = 0
-    for order_id, data in orders.items():
-        if count >= 10:
+    # Показываем только последние 10, чтобы не спамить
+    for i, (oid, data) in enumerate(orders.items()):
+        if i >= 10:
             break
-        count += 1
 
-        status_icon = "⏳"
-        status_text = "Ожидание"
+        # --- ЛОГИКА СТАТУСОВ ---
+        status_line = ""
 
-        # Если оплачено - ставим галочку
-        if data["status"] == "paid" or data["delivery_status"] == "delivered":
-            status_icon = "✅"
-            status_text = "Оплачено"
+        # 1. Если товар уже выдан
+        if data["delivery_status"] == "delivered":
+            status_line = "🎁 <b>СТАТУС: ВЫДАН</b>"
 
-            # Добавляем КНОПКУ только для оплаченных товаров
-            kb.add(
-                types.InlineKeyboardButton(
-                    f"{status_icon} {data['product_name']}",
-                    callback_data=f"myord_{order_id}",
-                )
-            )
+        # 2. Если оплачен, но почему-то не выдан (сбой)
+        elif data["status"] == "paid":
+            status_line = "✅ <b>СТАТУС: ОПЛАЧЕН</b> (Обработка...)"
+
+        # 3. Если ждет оплаты
+        elif data["status"] == "waiting_payment":
+            status_line = f"⏳ <b>СТАТУС: ОЖИДАЕТ ОПЛАТЫ</b>\n🔗 <a href='{data['payment_url']}'>Оплатить сейчас</a>"
+
+        # 4. Другое (Expired, Error)
         else:
-            # Для неоплаченных просто показываем текст (или кнопку оплаты, если хотите)
-            text += f"{status_icon} {data['product_name']} — {data['price']}$\n"
+            status_line = f"❌ <b>СТАТУС: {data['status'].upper()}</b>"
 
-    if len(kb.keyboard) == 0:
-        text += "\n_У вас нет завершенных покупок._"
+        # Формируем красивый блок
+        text += (
+            f"🛒 <b>{data['product_name']}</b>\n"
+            f"🆔 <code>{oid}</code> | 💰 {data['price']} $\n"
+            f"{status_line}\n"
+            f"➖➖➖➖➖➖➖➖➖➖\n"
+        )
 
-    bot.send_message(uid, text, reply_markup=kb, parse_mode="Markdown")
+    # Добавляем кнопку "disable_web_page_preview", чтобы ссылки не разворачивались
+    bot.send_message(
+        message.chat.id, text, parse_mode="HTML", disable_web_page_preview=True
+    )
 
 
 # Хендлер для нажатия на кнопку заказа в списке
@@ -585,3 +617,189 @@ def get_purchased_product(call):
         bot.answer_callback_query(call.id, "Данные отправлены!")
     except Exception as e:
         bot.send_message(uid, text + "\n\n(Фото недоступно)", parse_mode="Markdown")
+
+
+# --- 4. РУЧНАЯ ВЫДАЧА ТОВАРА (GIVE) ---
+
+
+@bot.message_handler(func=lambda m: m.text == "🎁 Выдать товар")
+def give_start(m):
+    if m.from_user.id not in ADMIN_IDS:
+        return
+    stores = get_all_stores()
+    kb = types.InlineKeyboardMarkup()
+    for s in stores:
+        kb.add(
+            types.InlineKeyboardButton(
+                s["title"], callback_data=f"give_s_{s['store_id']}"
+            )
+        )
+    bot.send_message(m.chat.id, "В какой категории товар для выдачи?", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("give_s_"))
+def give_list_prods(c):
+    sid = c.data.split("_")[2]
+    prods = get_products_by_store(sid)
+    if not prods:
+        return bot.answer_callback_query(
+            c.id, "В этой категории пусто.", show_alert=True
+        )
+
+    kb = types.InlineKeyboardMarkup()
+    for p in prods:
+        kb.add(
+            types.InlineKeyboardButton(
+                f"{p['name']} ({p['price_usd']}$)",
+                callback_data=f"give_p_{p['product_id']}",
+            )
+        )
+    bot.edit_message_text(
+        "Выберите товар, который хотите выдать:",
+        c.message.chat.id,
+        c.message.message_id,
+        reply_markup=kb,
+    )
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("give_p_"))
+def give_ask_user(c):
+    pid = c.data.split("_")[2]
+    admin_state[c.from_user.id] = {"give_pid": pid}
+
+    msg = bot.send_message(
+        c.message.chat.id, "🆔 Введите ID пользователя, которому выдать товар (цифры):"
+    )
+    bot.register_next_step_handler(msg, give_process)
+
+
+def give_process(m):
+    try:
+        target_uid = int(m.text)
+        pid = admin_state[m.from_user.id]["give_pid"]
+    except:
+        return bot.send_message(m.chat.id, "❌ Некорректный ID. Операция отменена.")
+
+    # Получаем детали товара
+    details = get_product_details_by_id(pid)
+    if not details:
+        return bot.send_message(m.chat.id, "❌ Товар не найден (возможно, уже продан).")
+
+    # Формируем сообщение для клиента
+    text = (
+        f"🎁 <b>ВАМ ВЫДАН ТОВАР (Администратором)</b>\n"
+        f"📦 Товар: <b>{details['product_name']}</b>\n\n"
+        f"📍 <b>ВАШ КЛАД:</b>\n{details['delivery_text']}\n\n"
+        f"—————————————\n"
+        f"Спасибо за покупку \n"
+        f"быстрого подъёма и мягкого покура🥰\n\n"
+        f"Отзывы довольных клиентов⤵️\n"
+        f"https://t.me/+NW9rf1wPSl5lZmM6\n\n"
+        f"Резервы в случае блокировки ⤵️⤵️⤵️\n"
+        f"@scooby_doorezerv1\n"
+        f"@scooby_doorezerv2\n"
+        f"@scoobbyy_doo\n\n"
+        f"Это все актуальные линки \n"
+        f"Остальное скам-мошенники\n"
+        f"—————————————"
+    )
+
+    try:
+        # 1. Отправляем товар клиенту
+        bot.send_photo(
+            target_uid, details["file_path"], caption=text, parse_mode="HTML"
+        )
+
+        # 2. Помечаем как проданный в БД (функция должна быть импортирована из storage)
+        from bot.storage import mark_product_as_sold
+
+        mark_product_as_sold(pid)
+
+        # 3. Создаем запись в заказах (для истории)
+        # Генерируем фейковый ID заказа
+        fake_oid = f"MANUAL-{int(time.time())}"
+        # add_order требует много параметров, передадим заглушки
+        add_order(target_uid, pid, 0.0, "Manual Delivery", fake_oid, "MANUAL", "MANUAL")
+        # Обновляем статус на delivered
+        from bot.storage import update_order
+
+        update_order(fake_oid, status="manual_gift", delivery_status="delivered")
+
+        bot.send_message(
+            m.chat.id,
+            f"✅ Товар успешно выдан пользователю {target_uid} и убран с витрины.",
+        )
+
+    except Exception as e:
+        bot.send_message(
+            m.chat.id,
+            f"❌ Ошибка отправки (возможно бот заблокирован пользователем): {e}",
+        )
+
+    # Возврат в админку
+    admin_panel(m)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("check_"))
+def check_payment_status(call):
+    oid = call.data.split("_")[1]
+    order = get_order(oid)
+
+    if not order:
+        return bot.answer_callback_query(call.id, "Заказ не найден.")
+
+    if order["delivery_status"] == "delivered":
+        return bot.answer_callback_query(
+            call.id, "✅ Этот товар уже выдан!", show_alert=True
+        )
+
+    bot.answer_callback_query(call.id, "🔄 Проверяю в блокчейне...")
+
+    # 1. Проверяем через API OxaPay
+    # Убедитесь, что в базе есть oxapay_track_id. В add_order мы его сохраняли.
+    # Если его нет в get_order, нужно добавить в storage.py в SELECT
+
+    # Предполагаем, что track_id есть в таблице orders, но get_order его может не возвращать.
+    # ВАЖНО: Проверьте bot/storage.py -> get_order. Он должен возвращать 'oxapay_track_id'.
+    # Если нет, добавьте его в return.
+
+    # Временное решение: делаем запрос к БД напрямую за track_id, если его нет в dict
+    track_id = order.get("oxapay_track_id")
+    # (Если в get_order вы не добавили это поле, то проверка не сработает)
+
+    is_paid = verify_payment_via_api(track_id)
+
+    if is_paid:
+        # === ВЫДАЧА ТОВАРА ===
+        details = get_product_details_by_id(order["product_id"])
+
+        text = (
+            f"✅ <b>Оплата подтверждена!</b>\n"
+            f"📦 Товар: <b>{details['product_name']}</b>\n\n"
+            f"📍 <b>ВАШ КЛАД:</b>\n{details['delivery_text']}\n\n"
+            f"—————————————\n"
+            f"Спасибо за покупку!\n"
+            f"—————————————"
+        )
+
+        try:
+            bot.send_photo(
+                call.from_user.id, details["file_path"], caption=text, parse_mode="HTML"
+            )
+
+            # Обновляем статусы
+            update_order(oid, status="paid", delivery_status="delivered")
+            mark_product_as_sold(order["product_id"])
+
+            bot.edit_message_text(
+                f"✅ Заказ {oid} успешно выдан!",
+                call.message.chat.id,
+                call.message.message_id,
+            )
+        except Exception as e:
+            bot.send_message(call.from_user.id, "Ошибка выдачи фото. Пишите админу.")
+    else:
+        bot.send_message(
+            call.from_user.id,
+            "❌ Оплата пока не поступила или подтверждается сетью. Подождите пару минут и нажмите кнопку снова.",
+        )

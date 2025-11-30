@@ -172,27 +172,36 @@ def get_order(order_id):
             "product_id": result[0][2],
             "delivery_status": result[0][6],
             "status": result[0][5],
+            "oxapay_track_id": result[0][7]
         }
     return None
 
 
 def find_orders_by_user(user_id):
+    """Ищет все заказы пользователя."""
     query = """
-    SELECT o.order_id, o.status, o.price_usd, p.name, o.delivery_status
+    SELECT o.order_id, o.status, o.price_usd, p.name, o.delivery_status, o.payment_url
     FROM orders o
-    JOIN products p ON o.product_id = p.product_id
+    LEFT JOIN products p ON o.product_id = p.product_id
     WHERE o.user_id = %s 
     ORDER BY o.created_at DESC;
     """
     results = execute_query(query, (user_id,), fetch=True)
+
     orders_dict = {}
     if results:
         for row in results:
-            oid, status, price, p_name, d_status = row
+            oid, status, price, p_name, d_status, pay_url = row
+
+            # Если товар удален из базы, p.name вернет None
+            if not p_name:
+                p_name = "Удаленный товар"
+
             orders_dict[oid] = {
                 "status": status,
                 "price": float(price),
                 "product_name": p_name,
                 "delivery_status": d_status,
+                "payment_url": pay_url,
             }
     return orders_dict

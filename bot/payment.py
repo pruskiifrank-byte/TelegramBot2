@@ -1,78 +1,56 @@
 # bot/payment.py
 import requests
-import json
-import time
 from bot.config import OXAPAY_API_KEY, BASE_URL
 
-# Импортируем только функции, работающие с БД, и get_order для колбэков
-from bot.storage import add_order, update_order, get_order
-
 OXAPAY_INVOICE_URL = "https://api.oxapay.com/v1/payment/invoice"
+OXAPAY_STATUS_URL = "https://api.oxapay.com/v1/payment/status"
 
 
 def create_invoice(user_id, amount_usd, order_id):
-    """
-    Создание инвойса OxaPay v1.
-    order_id должен быть создан и передан из bot.py.
-    """
-
+    """Создание ссылки на оплату."""
     headers = {"merchant_api_key": OXAPAY_API_KEY, "Content-Type": "application/json"}
-
     data = {
         "amount": amount_usd,
         "currency": "USD",
-        "lifetime": 60,
+        "lifetime": 60,  # Время жизни инвойса в минутах
         "fee_paid_by_payer": 1,
-        "under_paid_coverage": 10,
-        "to_currency": "USDT",
-        "auto_withdrawal": False,
-        "mixed_payment": True,
+        "under_paid_coverage": 5,  # Допускаем небольшую недоплату
+        "to_currency": "USDT",  # Конвертируем все в USDT
         "callback_url": f"{BASE_URL}/oxapay/ipn",
-        "return_url": "https://t.me/MrGrinchShopZp_Bot",  # Замените на юзернейм своего бота
-        "email": "",
+        "description": f"Order {order_id}",
         "order_id": order_id,
-        "thanks_message": "Спасибо за оплату!",
-        "description": "Номер заказа " + order_id,
-        "sandbox": False,
     }
-
     try:
-        response = requests.post(OXAPAY_INVOICE_URL, json=data, headers=headers)
+        response = requests.post(
+            OXAPAY_INVOICE_URL, json=data, headers=headers, timeout=10
+        )
         result = response.json()
+        if result.get("result") == 100:
+            return result["data"]["payment_url"], result["data"]["track_id"]
     except Exception as e:
-        print(f"Request error: {e}")
-        return None
-
-    if result.get("status") != 200:
-        print(f"OxaPay API error: {result}")
-        return None
-
-    payment_data = result["data"]
-    pay_url = payment_data["payment_url"]
-    track_id = payment_data["track_id"]
-
-    # Теперь мы только возвращаем данные для обновления записи в БД в bot.py
-    return pay_url, track_id
+        print(f"OxaPay Create Error: {e}")
+    return None
 
 
-def handle_oxapay_callback(data):
+def verify_payment_via_api(track_id):
     """
-    Обработка IPN callback
+    Проверяет реальный статус заказа через API OxaPay.
+    Возвращает True, если заказ оплачен.
     """
-    order_id = data.get("order_id")
-    track_id = data.get("track_id")
-    status = data.get("status")  # "paid", "confirmed", etc
-    amount = data.get("amount")
-
-    # 1. Проверяем существование заказа в БД
-    existing_order = get_order(order_id)
-
-    if not order_id or not existing_order:
-        print(f"Callback error: Order ID {order_id} not found.")
+    if not track_id:
         return False
 
-    # 2. Обновляем статус заказа в БД
-    update_order(order_id, status=status)
+    data = {"merchant_api_key": OXAPAY_API_KEY, "track_id": track_id}
+    try:
+        response = requests.post(OXAPAY_STATUS_URL, json=data, timeout=10)
+        res_json = response.json()
 
-    # NOTE: В server.py мы вызываем give_product
-    return True
+        # Проверяем успешный ответ и статус
+        if res_json.get("result") == 100:
+            status = res_json.get("data", {}).get("status", "").lower()
+            if status in ["paid", "confirmed", "complete"]:
+                return True
+    except Exception as e:
+        print(f"API Check Error: {e}")
+
+    return False
