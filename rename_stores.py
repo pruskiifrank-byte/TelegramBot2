@@ -1,6 +1,7 @@
 # rename_stores.py
 from bot.db import execute_query
 
+
 def rename_category(part_of_old_name, new_name):
     """
     Ищет магазин, в названии которого есть part_of_old_name,
@@ -19,20 +20,21 @@ def rename_category(part_of_old_name, new_name):
     for store in results:
         store_id, old_title = store
         print(f"🔄 Меняем: '{old_title}' -> '{new_name}'")
-        
+
         update_query = "UPDATE stores SET title = %s WHERE store_id = %s;"
         execute_query(update_query, (new_name, store_id))
-        
+
     print("✅ Успешно!")
+
 
 if __name__ == "__main__":
     # --- НАСТРОЙКИ (МЕНЯТЬ ТУТ) ---
-    
+
     # Пример: найти магазин где есть слово "Фрукты" и назвать его "Электроника"
-    rename_category("📱 Электроника", "MrGrinchShopZp")
-    
+    rename_category("MrGrinchShopZp", "MrGrinchShopZp")
+
     # Пример: найти магазин где есть слово "Овощи" и назвать его "Одежда"
-    rename_category("👕 Одежда", "Магазин")
-    
+    rename_category("Магазин", "ScoobyDoo")
+
     # Можете добавить свои строки:
     # rename_category("Старое название", "Новое название")
