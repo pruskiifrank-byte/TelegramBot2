@@ -21,6 +21,15 @@ def get_connection():
         return None
 
 
+def check_store_count():
+    """Проверяет количество записей в таблице stores."""
+    query = "SELECT COUNT(*) FROM stores;"
+    result = execute_query(query, fetch=True)
+    if result:
+        return result[0][0]
+    return 0
+
+
 def execute_query(query, params=None, fetch=False):
     """Выполняет SQL-запрос."""
     conn = get_connection()
