@@ -14,6 +14,12 @@ from bot.storage import update_order, get_order
 app = Flask(__name__)
 
 
+@app.route("/")
+def home():
+    """Простое сообщение для проверки живости сервиса."""
+    return "Bot service is running.", 200
+
+
 # --- Telegram Webhook ---
 @app.route(f"/webhook/{TELEGRAM_TOKEN}", methods=["POST"])
 def telegram_webhook():
