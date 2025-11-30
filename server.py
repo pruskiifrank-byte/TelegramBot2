@@ -1,112 +1,90 @@
 # server.py
-
 from flask import Flask, request, abort
 import telebot
 import os
-
-# --- Импорты ---
-from bot.config import TELEGRAM_TOKEN
+import requests  # НУЖЕН ДЛЯ ПРОВЕРКИ API
+from bot.config import TELEGRAM_TOKEN, OXAPAY_API_KEY, ADMIN_IDS
 from bot.bot import bot
+from bot.storage import update_order, get_order, get_product_details_by_id
 from bot.payment import handle_oxapay_callback
 
-# !!! Вот здесь был пропущен импорт, добавляем его явно:
-from bot.storage import update_order, get_order, get_product_details_by_id
-
-
-# ----------------------------------------------------------------------
-# ФУНКЦИЯ ВЫДАЧИ ТОВАРА
-# ----------------------------------------------------------------------
-def give_product(user_id, order_id):
-    """
-    Отправляет адрес/фото клиенту после успешной оплаты.
-    """
-    order_data = get_order(order_id)
-    if not order_data:
-        print(f"[DELIVERY] ERROR: Order ID {order_id} not found for delivery.")
-        return False
-
-    # Теперь функция get_product_details_by_id доступна благодаря импорту выше
-    product_data = get_product_details_by_id(order_data["product_id"])
-
-    if not product_data:
-        print(f"[DELIVERY] ERROR: Product ID {order_data['product_id']} not found.")
-        update_order(order_id, delivery_status="error")
-        return False
-
-    delivery_text = product_data.get(
-        "delivery_text", "Данные для получения отсутствуют."
-    )
-    product_name = product_data.get("product_name", "Товар")
-
-    caption_text = (
-        f"✅ **Оплата заказа №{order_id} подтверждена!**\n\n"
-        f"**Товар:** {product_name}\n\n"
-        f"**ИНСТРУКЦИЯ КЛАДА:**\n{delivery_text}"
-    )
-
-    try:
-        bot.send_message(user_id, caption_text, parse_mode="Markdown")
-        update_order(order_id, delivery_status="delivered")
-        print(
-            f"[DELIVERY] Successfully delivered Order ID: {order_id} to User ID: {user_id}"
-        )
-        return True
-    except Exception as e:
-        print(f"[DELIVERY] FATAL ERROR during delivery for Order ID {order_id}: {e}")
-        update_order(order_id, delivery_status="failed")
-        return False
-
-
-# ----------------------------------------------------------------------
 app = Flask(__name__)
 
 
-@app.route("/")
-def home():
-    return "Bot service is running.", 200
+# --- БЕЗОПАСНОСТЬ: Проверка через API OxaPay ---
+def verify_payment_via_api(track_id):
+    url = "https://api.oxapay.com/v1/payment/status"
+    data = {"merchant_api_key": OXAPAY_API_KEY, "track_id": track_id}
+    try:
+        r = requests.post(url, json=data, timeout=10).json()
+        if r.get("result") == 100 and r.get("data", {}).get("status") in [
+            "Paid",
+            "Confirmed",
+            "paid",
+        ]:
+            return True
+    except Exception as e:
+        print(f"API Check Error: {e}")
+    return False
 
 
+# --- ВЫДАЧА ТОВАРА ---
+def give_product(user_id, order_id):
+    order = get_order(order_id)
+    if not order or order["delivery_status"] == "delivered":
+        return False  # Уже выдали
+
+    prod = get_product_details_by_id(order["product_id"])
+    if not prod:
+        return False
+
+    text = f"✅ <b>Оплата прошла!</b>\nТовар: {prod['product_name']}\n\n📍 <b>КЛАД:</b>\n{prod['delivery_text']}"
+
+    try:
+        # Отправляем фото по ID
+        bot.send_photo(user_id, prod["file_path"], caption=text, parse_mode="HTML")
+        update_order(order_id, delivery_status="delivered")
+        return True
+    except telebot.apihelper.ApiTelegramException as e:
+        # Если бот в блоке, шлем админу
+        for adm in ADMIN_IDS:
+            bot.send_message(
+                adm,
+                f"🆘 АВАРИЯ! Клиент {user_id} оплатил, но заблокировал бота!\nOrder: {order_id}",
+            )
+        return False
+    except Exception as e:
+        print(f"Delivery Error: {e}")
+        return False
+
+
+# --- ROUTES ---
 @app.route(f"/webhook/{TELEGRAM_TOKEN}", methods=["POST"])
 def telegram_webhook():
     if request.headers.get("content-type") == "application/json":
-        json_str = request.get_data().decode("UTF-8")
-        update = telebot.types.Update.de_json(json_str)
+        update = telebot.types.Update.de_json(request.get_data().decode("UTF-8"))
         bot.process_new_updates([update])
         return "OK", 200
-    else:
-        abort(403)
+    abort(403)
 
 
 @app.route("/oxapay/ipn", methods=["POST"])
 def oxapay_ipn():
-    if request.headers.get("content-type") != "application/json":
-        abort(403)
-
-    try:
-        data = request.get_json()
-    except Exception:
-        return "Invalid JSON format", 400
-
+    data = request.get_json()
     order_id = data.get("order_id")
+    track_id = data.get("track_id")
     status = data.get("status")
 
-    if not order_id or not status:
-        return "Missing order_id or status in data", 400
-
-    if not handle_oxapay_callback(data):
-        return "Order verification or storage error", 400
-
     if status == "paid":
-        order_data = get_order(order_id)
-        if not order_data:
-            return "Order data not found after callback processing", 400
+        # 1. Защита от фейков
+        if not verify_payment_via_api(track_id):
+            return "Fake Callback", 400
 
-        user_id = order_data.get("user_id")
+        # 2. Обновление статуса
+        handle_oxapay_callback(data)
 
-        if order_data.get("delivery_status") == "pending":
-            give_product(user_id, order_id)
-
-        return "OK", 200
+        # 3. Выдача
+        give_product(get_order(order_id)["user_id"], order_id)
 
     return "OK", 200
 

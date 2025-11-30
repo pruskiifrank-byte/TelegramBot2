@@ -1,32 +1,20 @@
 # bot/db.py
-
 import os
 import psycopg2
-from decimal import Decimal
+from bot.config import DATABASE_URL
 
-# !!! ВАЖНО !!! ЗАМЕНИТЕ ЭТУ СТРОКУ ВАШЕЙ РЕАЛЬНОЙ СТРОКОЙ ПОДКЛЮЧЕНИЯ RENDER
-DATABASE_URL = os.environ.get("DATABASE_URL")
-
-if not DATABASE_URL:
-    raise ValueError("Не найдена переменная окружения DATABASE_URL. Проверьте настройки хостинга.")
 
 def get_connection():
     """Устанавливает и возвращает соединение с базой данных."""
+    if not DATABASE_URL:
+        print("❌ ОШИБКА: Не задан DATABASE_URL")
+        return None
     try:
         conn = psycopg2.connect(DATABASE_URL)
         return conn
     except Exception as e:
-        print(f"Ошибка подключения к БД: {e}")
+        print(f"🚨 Ошибка подключения к БД: {e}")
         return None
-
-
-def check_store_count():
-    """Проверяет количество записей в таблице stores."""
-    query = "SELECT COUNT(*) FROM stores;"
-    result = execute_query(query, fetch=True)
-    if result:
-        return result[0][0]
-    return 0
 
 
 def execute_query(query, params=None, fetch=False):
@@ -36,19 +24,14 @@ def execute_query(query, params=None, fetch=False):
         return None
 
     result = None
-
     try:
         with conn.cursor() as cur:
             cur.execute(query, params)
             if fetch:
-                result = cur.fetchall()  # Получаем результат RETURNING
-
-            # Явный коммит для всех запросов на изменение данных
+                result = cur.fetchall()
             conn.commit()
-
     except Exception as e:
-        print(f"🚨 ОШИБКА SQL: {e}")
-        # Откат транзакции на случай сбоя
+        print(f"🚨 SQL ERROR: {e}\nQuery: {query}")
         conn.rollback()
     finally:
         if conn:
