@@ -1,13 +1,9 @@
 # bot/storage.py
 from .db import execute_query
 
-# ==========================================
-#              ПОЛЬЗОВАТЕЛИ
-# ==========================================
 
-
+# --- ПОЛЬЗОВАТЕЛИ ---
 def upsert_user(user_id, username, first_name):
-    """Сохраняет пользователя или обновляет его данные (для рассылки)."""
     query = """
     INSERT INTO users (user_id, username, first_name)
     VALUES (%s, %s, %s)
@@ -18,16 +14,11 @@ def upsert_user(user_id, username, first_name):
 
 
 def get_all_users():
-    """Возвращает список ID всех пользователей."""
     res = execute_query("SELECT user_id FROM users;", fetch=True)
     return [row[0] for row in res] if res else []
 
 
-# ==========================================
-#           МАГАЗИНЫ И ТОВАРЫ
-# ==========================================
-
-
+# --- МАГАЗИНЫ И ТОВАРЫ ---
 def get_all_stores():
     query = "SELECT store_id, title FROM stores ORDER BY store_id;"
     results = execute_query(query, fetch=True)
@@ -39,10 +30,7 @@ def get_all_stores():
 
 
 def get_products_by_store(store_id):
-    """
-    Возвращает товары магазина.
-    ВАЖНО: Добавлено условие is_sold = FALSE, чтобы скрывать проданные.
-    """
+    # Показываем только НЕ проданные
     query = """
     SELECT product_id, name, price_usd 
     FROM products 
@@ -61,7 +49,7 @@ def get_products_by_store(store_id):
 
 def get_product_details_by_id(product_id):
     query = """
-    SELECT p.price_usd, p.file_path, p.delivery_text, p.name, s.title 
+    SELECT p.price_usd, p.file_path, p.delivery_text, p.name, s.title, p.address
     FROM products p 
     JOIN stores s ON p.store_id = s.store_id 
     WHERE p.product_id = %s;
@@ -75,42 +63,30 @@ def get_product_details_by_id(product_id):
             "delivery_text": row[2],
             "product_name": row[3],
             "shop_title": row[4],
-            "address": row[5],
+            "address": row[5] if len(row) > 5 else "Не указан",
         }
     return None
 
 
 def mark_product_as_sold(product_id):
-    """Помечает товар как проданный (скрывает с витрины)."""
     query = "UPDATE products SET is_sold = TRUE WHERE product_id = %s;"
     execute_query(query, (product_id,))
 
 
-# ==========================================
-#           АДМИНКА (РЕДАКТИРОВАНИЕ)
-# ==========================================
-
-
-def insert_product(store_id, name, price, delivery_text, file_path):
+# --- АДМИНКА ---
+def insert_product(store_id, name, price, delivery_text, file_path, address):
+    """Добавляет товар (с адресом и списком фото)."""
     query = """
     INSERT INTO products (store_id, name, price_usd, delivery_text, file_path, address, is_sold)
-    VALUES (%s, %s, %s, %s, %s, FALSE);
+    VALUES (%s, %s, %s, %s, %s, %s, FALSE);
     """
-    execute_query(query, (store_id, name, price, delivery_text, file_path))
-
-
-def cancel_order_db(order_id):
-    """Меняет статус заказа на cancelled."""
-    query = "UPDATE orders SET status = 'cancelled' WHERE order_id = %s;"
-    execute_query(query, (order_id,))
+    execute_query(query, (store_id, name, price, delivery_text, file_path, address))
 
 
 def update_product_field(product_id, field, value):
-    """Обновляет одно поле товара."""
-    allowed_fields = ["name", "price_usd", "delivery_text", "file_path"]
+    allowed_fields = ["name", "price_usd", "delivery_text", "file_path", "address"]
     if field not in allowed_fields:
         return
-
     query = f"UPDATE products SET {field} = %s WHERE product_id = %s;"
     execute_query(query, (value, product_id))
 
@@ -119,11 +95,7 @@ def delete_product(product_id):
     execute_query("DELETE FROM products WHERE product_id = %s;", (product_id,))
 
 
-# ==========================================
-#                ЗАКАЗЫ
-# ==========================================
-
-
+# --- ЗАКАЗЫ ---
 def add_order(
     user_id,
     product_id,
@@ -168,11 +140,17 @@ def update_order(order_id, **kwargs):
     execute_query(query, tuple(params))
 
 
+def cancel_order_db(order_id):
+    query = "UPDATE orders SET status = 'cancelled' WHERE order_id = %s;"
+    execute_query(query, (order_id,))
+
+
 def get_order(order_id):
     query = "SELECT * FROM orders WHERE order_id = %s;"
     result = execute_query(query, (order_id,), fetch=True)
     if result:
-        # 0:order_id, 1:user_id, 2:product_id, ... 5:status, 6:delivery_status
+        # Индексы зависят от порядка создания таблицы.
+        # Обычно: 0-order_id, 1-user, 2-prod, 3-addr, 4-price, 5-status, 6-deliv, 7-track
         return {
             "order_id": result[0][0],
             "user_id": result[0][1],
@@ -185,7 +163,6 @@ def get_order(order_id):
 
 
 def find_orders_by_user(user_id):
-    """Ищет все заказы пользователя."""
     query = """
     SELECT o.order_id, o.status, o.price_usd, p.name, o.delivery_status, o.payment_url
     FROM orders o
@@ -194,16 +171,12 @@ def find_orders_by_user(user_id):
     ORDER BY o.created_at DESC;
     """
     results = execute_query(query, (user_id,), fetch=True)
-
     orders_dict = {}
     if results:
         for row in results:
             oid, status, price, p_name, d_status, pay_url = row
-
-            # Если товар удален из базы, p.name вернет None
             if not p_name:
                 p_name = "Удаленный товар"
-
             orders_dict[oid] = {
                 "status": status,
                 "price": float(price),

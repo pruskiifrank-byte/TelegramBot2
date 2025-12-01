@@ -25,7 +25,6 @@ from bot.storage import (
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="HTML", threaded=False)
 
-# Состояния
 user_state = {}
 admin_state = {}
 flood_control = {}
@@ -36,9 +35,7 @@ MAX_UNPAID_ORDERS = 5
 
 
 def send_product_visuals(chat_id, file_path_str, caption):
-    """Умная отправка: одно фото или альбом."""
     photos = file_path_str.split(",")
-
     if len(photos) == 1:
         bot.send_photo(chat_id, photos[0], caption=caption, parse_mode="HTML")
     else:
@@ -104,7 +101,6 @@ def handle_buy(message):
     stores = get_all_stores()
     if not stores:
         return bot.send_message(message.chat.id, "❌ Витрина пуста.")
-
     kb = types.InlineKeyboardMarkup()
     for s in stores:
         kb.add(
@@ -112,7 +108,6 @@ def handle_buy(message):
                 s["title"], callback_data=f"store_{s['store_id']}_0"
             )
         )
-
     bot.send_message(message.chat.id, "📂 Выберите категорию:", reply_markup=kb)
 
 
@@ -126,7 +121,6 @@ def handle_store(call):
     parts = call.data.split("_")
     store_id = parts[1]
     page = int(parts[2]) if len(parts) > 2 else 0
-
     products = get_products_by_store(store_id)
     if not products:
         return bot.send_message(call.message.chat.id, "В этой категории пока пусто.")
@@ -157,7 +151,6 @@ def handle_store(call):
         nav.append(
             types.InlineKeyboardButton("➡️", callback_data=f"store_{store_id}_{page+1}")
         )
-
     kb.row(*nav)
     kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="cmd_buy_callback"))
 
@@ -191,13 +184,19 @@ def handle_prod_selection(call):
         pass
 
     uid = call.from_user.id
-
     orders = find_orders_by_user(uid)
-    unpaid = sum(1 for d in orders.values() if d.get("status") == "waiting_payment")
+    unpaid = 0
+    for d in orders.values():
+        if (
+            d.get("status") == "waiting_payment"
+            and d.get("delivery_status") != "delivered"
+        ):
+            unpaid += 1
+
     if unpaid >= MAX_UNPAID_ORDERS:
         return bot.send_message(
             uid,
-            f"🚫 <b>Лимит заказов ({MAX_UNPAID_ORDERS}) превышен!</b>",
+            f"🚫 <b>Лимит заказов ({MAX_UNPAID_ORDERS}) превышен!</b>\nОтмените старые заказы.",
             parse_mode="HTML",
         )
 
@@ -231,7 +230,11 @@ def handle_prod_selection(call):
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("💳 Оплатить", url=pay_url))
     sid = user_state.get(uid, {}).get("store_id", "1")
-    kb.add(types.InlineKeyboardButton("🔙 Отмена", callback_data="cmd_buy_callback"))
+    kb.add(
+        types.InlineKeyboardButton(
+            "🔙 Отмена", callback_data=f"store_{sid}_0" if sid else "cmd_buy_callback"
+        )
+    )
 
     try:
         bot.edit_message_text(
@@ -254,7 +257,6 @@ def my_orders(message):
         return bot.send_message(message.chat.id, "📭 История пуста.")
 
     text = "📦 <b>ВАШИ ПОСЛЕДНИЕ ЗАКАЗЫ:</b>\n\n"
-
     for i, (oid, data) in enumerate(orders.items()):
         if i >= 5:
             break
@@ -285,7 +287,6 @@ def my_orders(message):
         if status == "waiting_payment":
             bot.send_message(message.chat.id, text, reply_markup=kb, parse_mode="HTML")
             text = ""
-
     if text:
         bot.send_message(message.chat.id, text, parse_mode="HTML")
 
@@ -311,13 +312,7 @@ def check_pay(call):
     bot.answer_callback_query(call.id, "Проверяю...")
     if verify_payment_via_api(order.get("oxapay_track_id")):
         details = get_product_details_by_id(order["product_id"])
-
-        msg = (
-            f"✅ <b>Оплата прошла!</b>\n📦 {details['product_name']}\n📍 {details['delivery_text']}\n\n"
-            f"Спасибо за покупку!\n"
-            f"—————————————"
-        )
-
+        msg = f"✅ <b>Оплата прошла!</b>\n📦 {details['product_name']}\n📍 {details['delivery_text']}\n\nСпасибо за покупку!"
         try:
             send_product_visuals(call.from_user.id, details["file_path"], msg)
             update_order(oid, status="paid", delivery_status="delivered")
@@ -598,6 +593,7 @@ def edit_field(c):
     kb.add(
         types.InlineKeyboardButton("Название", callback_data="edf_name"),
         types.InlineKeyboardButton("Цена", callback_data="edf_price_usd"),
+        types.InlineKeyboardButton("Адрес", callback_data="edf_address"),
     )
     bot.edit_message_text(
         "Что меняем?", c.message.chat.id, c.message.message_id, reply_markup=kb
