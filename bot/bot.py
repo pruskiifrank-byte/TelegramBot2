@@ -164,47 +164,54 @@ def noop(c):
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("prod_"))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("prod_"))
 def handle_prod_selection(call):
-    """Показывает товар и СРАЗУ кнопку оплаты (без фото, без адреса)."""
-    pid = int(call.data.split("_")[1])
-    details = get_product_details_by_id(pid)
+    # 1. Получаем данные
+    try:
+        pid = int(call.data.split("_")[1])
+        details = get_product_details_by_id(pid)
+    except:
+        details = None
+
     if not details:
         return bot.answer_callback_query(call.id, "Ошибка товара")
 
     uid = call.from_user.id
-
-    # Генерируем ссылку на оплату сразу
     temp_oid = f"ORD-{int(time.time())}-{uid}"
+
+    # 2. Создаем инвойс
     res = create_invoice(uid, details["price_usd"], temp_oid)
 
+    # 3. ПРОВЕРКА: Если payment.py вернул None (ошибку), мы НЕ идем дальше
     if not res:
-        return bot.send_message(uid, "❌ Ошибка платежной системы.")
+        return bot.send_message(
+            uid,
+            "❌ Ошибка платежной системы (не удалось создать ссылку). Попробуйте позже.",
+        )
 
+    # Если мы здесь, значит pay_url точно есть
     pay_url, track_id = res
 
-    # Сохраняем заказ (Адрес теперь просто 'Online')
+    # 4. Сохраняем и отправляем
     real_oid = add_order(
         uid, pid, details["price_usd"], "Digital/Online", temp_oid, track_id, pay_url
     )
 
-    # Формируем сообщение БЕЗ ФОТО
     text = (
         f"🧾 **Заказ №{real_oid}**\n\n"
         f"📦 Товар: **{details['product_name']}**\n"
         f"💰 К оплате: **{details['price_usd']} $**\n\n"
-        f"⚠️ _Фото и данные для получения вы получите автоматически после оплаты или не получите_ 😈"
+        f"⚠️ _Фото и данные вы получите автоматически после оплаты._"
     )
 
     kb = types.InlineKeyboardMarkup()
+    # Теперь тут точно будет ссылка, и бот не упадет
     kb.add(types.InlineKeyboardButton("💳 Оплатить (Крипта)", url=pay_url))
-    kb.add(
-        types.InlineKeyboardButton(
-            "🔙 Отмена",
-            callback_data=f"store_{user_state.get(uid, {}).get('store_id', '1')}_0",
-        )
-    )  # Пробуем вернуть в магаз
 
-    # Отправляем новое сообщение, чтобы не путать с редактированием
+    # Кнопка отмены
+    store_id = user_state.get(uid, {}).get("store_id", "1")
+    kb.add(types.InlineKeyboardButton("🔙 Отмена", callback_data=f"store_{store_id}_0"))
+
     bot.send_message(uid, text, reply_markup=kb, parse_mode="Markdown")
     bot.answer_callback_query(call.id)
 
