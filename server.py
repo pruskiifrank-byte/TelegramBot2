@@ -3,6 +3,7 @@ from flask import Flask, request, abort
 import telebot
 import os
 import json
+from telebot.types import InputMediaPhoto
 from bot.config import TELEGRAM_TOKEN, OXAPAY_API_KEY, ADMIN_IDS
 from bot.bot import bot
 
@@ -49,14 +50,22 @@ def give_product(user_id, order_id):
     )
 
     try:
-        # Отправляем фото
-        bot.send_photo(user_id, prod["file_path"], caption=text, parse_mode="HTML")
+        # --- НОВАЯ ЛОГИКА ОТПРАВКИ АЛЬБОМА ---
+        photos = prod["file_path"].split(",")
 
-        # Обновляем статус заказа
+        if len(photos) == 1:
+            bot.send_photo(user_id, photos[0], caption=text, parse_mode="HTML")
+        else:
+            media = []
+            for i, file_id in enumerate(photos):
+                if i == 0:
+                    media.append(
+                        InputMediaPhoto(file_id, caption=text, parse_mode="HTML")
+                    )
+                else:
+                    media.append(InputMediaPhoto(file_id))
+            bot.send_media_group(user_id, media)
         update_order(order_id, delivery_status="delivered")
-
-        # !!! ВАЖНО: УБИРАЕМ ТОВАР С ВИТРИНЫ !!!
-        mark_product_as_sold(order["product_id"])
 
         return True
     except telebot.apihelper.ApiTelegramException as e:

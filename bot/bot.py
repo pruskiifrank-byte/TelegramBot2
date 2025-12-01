@@ -1,6 +1,7 @@
 # bot/bot.py
 import telebot
 from telebot import types
+from telebot.types import InputMediaPhoto
 import time
 import math
 from bot.config import TELEGRAM_TOKEN, ADMIN_IDS
@@ -31,7 +32,25 @@ flood_control = {}
 
 PRODUCTS_PER_PAGE = 5
 FLOOD_LIMIT = 0.5
-MAX_UNPAID_ORDERS = 5  # Лимит неоплаченных заказов
+MAX_UNPAID_ORDERS = 5
+
+
+def send_product_visuals(chat_id, file_path_str, caption):
+    """Умная отправка: одно фото или альбом."""
+    photos = file_path_str.split(",")
+
+    if len(photos) == 1:
+        bot.send_photo(chat_id, photos[0], caption=caption, parse_mode="HTML")
+    else:
+        media = []
+        for i, file_id in enumerate(photos):
+            if i == 0:
+                media.append(
+                    InputMediaPhoto(file_id, caption=caption, parse_mode="HTML")
+                )
+            else:
+                media.append(InputMediaPhoto(file_id))
+        bot.send_media_group(chat_id, media)
 
 
 def anti_flood(func):
@@ -64,7 +83,7 @@ def cmd_start(message):
     )
     bot.send_message(
         message.chat.id,
-        f"👋 Привет, {message.from_user.first_name}!\nДобро пожаловать в магазин!",
+        f"👋 Привет, {message.from_user.first_name}!\nДобро пожаловать в магазин!\n🎁 Выбирай быстрее. (Или я заберу это себе!)",
         reply_markup=main_menu(),
     )
 
@@ -79,8 +98,6 @@ def back_to_main(call):
 
 
 # --- ПОКУПКА ---
-
-
 @bot.message_handler(func=lambda m: m.text == "🛒 Купить")
 @anti_flood
 def handle_buy(message):
@@ -114,7 +131,6 @@ def handle_store(call):
     if not products:
         return bot.send_message(call.message.chat.id, "В этой категории пока пусто.")
 
-    # Пагинация
     total_pages = math.ceil(len(products) / PRODUCTS_PER_PAGE)
     start = page * PRODUCTS_PER_PAGE
     end = start + PRODUCTS_PER_PAGE
@@ -141,6 +157,7 @@ def handle_store(call):
         nav.append(
             types.InlineKeyboardButton("➡️", callback_data=f"store_{store_id}_{page+1}")
         )
+
     kb.row(*nav)
     kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="cmd_buy_callback"))
 
@@ -165,10 +182,9 @@ def noop(c):
     bot.answer_callback_query(c.id)
 
 
-# --- ВЫБОР ТОВАРА (ИСПРАВЛЕНО) ---
+# --- ВЫБОР ТОВАРА ---
 @bot.callback_query_handler(func=lambda c: c.data.startswith("prod_"))
 def handle_prod_selection(call):
-    # 1. СРАЗУ отвечаем Телеграму! (Это лечит ошибку "Query is too old")
     try:
         bot.answer_callback_query(call.id)
     except:
@@ -176,14 +192,12 @@ def handle_prod_selection(call):
 
     uid = call.from_user.id
 
-    # Проверка лимита
     orders = find_orders_by_user(uid)
     unpaid = sum(1 for d in orders.values() if d.get("status") == "waiting_payment")
-
     if unpaid >= MAX_UNPAID_ORDERS:
         return bot.send_message(
             uid,
-            f"🚫 <b>Лимит заказов ({MAX_UNPAID_ORDERS}) превышен!</b>\nОтмените старые заказы в меню '📦 Мои заказы'.",
+            f"🚫 <b>Лимит заказов ({MAX_UNPAID_ORDERS}) превышен!</b>",
             parse_mode="HTML",
         )
 
@@ -197,11 +211,9 @@ def handle_prod_selection(call):
         return bot.send_message(uid, "❌ Товар не найден.")
 
     temp_oid = f"ORD-{int(time.time())}-{uid}"
-
-    # Создаем оплату
     res = create_invoice(uid, details["price_usd"], temp_oid)
     if not res:
-        return bot.send_message(uid, "❌ Ошибка создания ссылки на оплату.")
+        return bot.send_message(uid, "❌ Ошибка создания ссылки.")
 
     pay_url, track_id = res
     real_oid = add_order(
@@ -218,13 +230,11 @@ def handle_prod_selection(call):
 
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("💳 Оплатить", url=pay_url))
-
-    # Кнопка отмены возвращает в категорию
     sid = user_state.get(uid, {}).get("store_id", "1")
-    # Если store_id потерялся, вернем просто в меню
-    kb.add(types.InlineKeyboardButton("🔙 Отмена", callback_data="cmd_buy_callback"))
+    kb.add(
+        types.InlineKeyboardButton("🔙 Отмена", callback_data="cmd_buy_callback")
+    )  # Исправил возврат
 
-    # Используем edit_message_text чтобы не спамить
     try:
         bot.edit_message_text(
             text,
@@ -239,6 +249,7 @@ def handle_prod_selection(call):
 
 # --- МОИ ЗАКАЗЫ ---
 @bot.message_handler(func=lambda m: m.text == "📦 Мои заказы")
+@anti_flood
 def my_orders(message):
     orders = find_orders_by_user(message.chat.id)
     if not orders:
@@ -249,7 +260,6 @@ def my_orders(message):
     for i, (oid, data) in enumerate(orders.items()):
         if i >= 5:
             break
-
         status = data["status"]
         kb = types.InlineKeyboardMarkup()
 
@@ -276,7 +286,7 @@ def my_orders(message):
 
         if status == "waiting_payment":
             bot.send_message(message.chat.id, text, reply_markup=kb, parse_mode="HTML")
-            text = ""  # Сбрасываем текст, чтобы следующий заказ шел новым сообщением (из-за кнопок)
+            text = ""
 
     if text:
         bot.send_message(message.chat.id, text, parse_mode="HTML")
@@ -302,21 +312,27 @@ def check_pay(call):
 
     bot.answer_callback_query(call.id, "Проверяю...")
     if verify_payment_via_api(order.get("oxapay_track_id")):
-        # Выдача
         details = get_product_details_by_id(order["product_id"])
-        msg = f"✅ <b>Оплата прошла!</b>\n📦 {details['product_name']}\n📍 {details['delivery_text']}\n\nСпасибо за покупку!"
+
+        msg = (
+            f"✅ <b>Оплата прошла!</b>\n📦 {details['product_name']}\n📍 {details['delivery_text']}\n\n"
+            f"Спасибо за покупку!\n"
+            f"—————————————"
+        )
+
         try:
-            bot.send_photo(
-                call.from_user.id, details["file_path"], caption=msg, parse_mode="HTML"
-            )
+            # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ ДЛЯ АЛЬБОМОВ
+            send_product_visuals(call.from_user.id, details["file_path"], msg)
+
             update_order(oid, status="paid", delivery_status="delivered")
             mark_product_as_sold(order["product_id"])
-        except:
-            bot.send_message(call.from_user.id, msg, parse_mode="HTML")
+            bot.edit_message_text(
+                f"✅ Заказ {oid} выдан!", call.message.chat.id, call.message.message_id
+            )
+        except Exception as e:
+            bot.send_message(call.from_user.id, f"Ошибка выдачи: {e}")
     else:
-        bot.send_message(
-            call.from_user.id, "❌ Оплата пока не найдена. Подождите немного."
-        )
+        bot.send_message(call.from_user.id, "❌ Оплата пока не найдена.")
 
 
 # --- АДМИНКА ---
@@ -337,7 +353,7 @@ def exit_admin(m):
         bot.send_message(m.chat.id, "Выход.", reply_markup=main_menu())
 
 
-# --- ДОБАВЛЕНИЕ ТОВАРА ---
+# --- ДОБАВЛЕНИЕ (МУЛЬТИ-ФОТО) ---
 @bot.message_handler(func=lambda m: m.text == "➕ Добавить товар")
 def adm_add(m):
     if m.from_user.id not in ADMIN_IDS:
@@ -383,18 +399,108 @@ def aadd_step4(m):
 
 def aadd_step5(m):
     admin_state[m.from_user.id]["desc"] = m.text
-    msg = bot.send_message(m.chat.id, "Фото товара:")
-    bot.register_next_step_handler(msg, aadd_step6)
+    admin_state[m.from_user.id]["photos"] = []  # Список фото
+    msg = bot.send_message(m.chat.id, "5️⃣ Отправьте **Первое фото**:")
+    bot.register_next_step_handler(msg, aadd_photo_loop)
 
 
-def aadd_step6(m):
-    if not m.photo:
-        return bot.send_message(m.chat.id, "Нет фото.")
+def aadd_photo_loop(m):
+    uid = m.from_user.id
+    if m.content_type == "photo":
+        admin_state[uid]["photos"].append(m.photo[-1].file_id)
+        count = len(admin_state[uid]["photos"])
+        kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+        kb.add("✅ Готово, сохранить")
+        msg = bot.send_message(
+            m.chat.id, f"📸 Фото: {count}. Шли еще или жми Готово:", reply_markup=kb
+        )
+        bot.register_next_step_handler(msg, aadd_photo_loop)
+        return
+    elif m.text == "✅ Готово, сохранить":
+        if not admin_state[uid]["photos"]:
+            msg = bot.send_message(m.chat.id, "Нужно хоть одно фото!")
+            bot.register_next_step_handler(msg, aadd_photo_loop)
+            return
+        aadd_finish(m)
+    else:
+        bot.send_message(m.chat.id, "Жду фото или кнопку.")
+        bot.register_next_step_handler(m, aadd_photo_loop)
+
+
+def aadd_finish(m):
     d = admin_state[m.from_user.id]
-    insert_product(
-        d["sid"], d["name"], d["price"], d["desc"], m.photo[-1].file_id, d["addr"]
+    photos_str = ",".join(d["photos"])
+    insert_product(d["sid"], d["name"], d["price"], d["desc"], photos_str, d["addr"])
+    kb = types.ReplyKeyboardRemove()
+    bot.send_message(m.chat.id, "✅ Товар добавлен!", reply_markup=kb)
+    admin_panel(m)
+
+
+# --- ВЫДАЧА (GIVE) ---
+@bot.message_handler(func=lambda m: m.text == "🎁 Выдать товар")
+def give_start(m):
+    if m.from_user.id not in ADMIN_IDS:
+        return
+    stores = get_all_stores()
+    kb = types.InlineKeyboardMarkup()
+    for s in stores:
+        kb.add(
+            types.InlineKeyboardButton(
+                s["title"], callback_data=f"give_s_{s['store_id']}"
+            )
+        )
+    bot.send_message(m.chat.id, "Категория?", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("give_s_"))
+def give_list(c):
+    sid = c.data.split("_")[2]
+    prods = get_products_by_store(sid)
+    kb = types.InlineKeyboardMarkup()
+    for p in prods:
+        kb.add(
+            types.InlineKeyboardButton(
+                p["name"], callback_data=f"give_p_{p['product_id']}"
+            )
+        )
+    bot.edit_message_text(
+        "Товар?", c.message.chat.id, c.message.message_id, reply_markup=kb
     )
-    bot.send_message(m.chat.id, "✅ Товар добавлен!")
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("give_p_"))
+def give_ask(c):
+    admin_state[c.from_user.id] = {"pid": c.data.split("_")[2]}
+    msg = bot.send_message(c.message.chat.id, "ID пользователя?")
+    bot.register_next_step_handler(msg, give_final)
+
+
+def give_final(m):
+    try:
+        uid = int(m.text)
+        pid = admin_state[m.from_user.id]["pid"]
+        details = get_product_details_by_id(pid)
+        if not details:
+            return bot.send_message(m.chat.id, "Нет товара.")
+
+        msg = (
+            f"🎁 <b>ВАМ ПОДАРОК!</b>\n📦 {details['product_name']}\n📍 {details['delivery_text']}\n\n"
+            f"Спасибо за покупку!\n"
+            f"—————————————"
+        )
+
+        # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ ДЛЯ АЛЬБОМОВ
+        send_product_visuals(uid, details["file_path"], msg)
+
+        mark_product_as_sold(pid)
+
+        fake_oid = f"GIFT-{int(time.time())}"
+        add_order(uid, pid, 0, "Gift", fake_oid, "GIFT", "GIFT")
+        update_order(fake_oid, status="paid", delivery_status="delivered")
+
+        bot.send_message(m.chat.id, "✅ Выдано!")
+    except Exception as e:
+        bot.send_message(m.chat.id, f"Ошибка: {e}")
 
 
 # --- УДАЛЕНИЕ ---
@@ -458,9 +564,9 @@ def do_broadcast(m):
     bot.send_message(m.chat.id, f"Отправлено {n} людям.")
 
 
-# --- ВЫДАЧА (GIVE) ---
-@bot.message_handler(func=lambda m: m.text == "🎁 Выдать товар")
-def give_start(m):
+# --- РЕДАКТИРОВАНИЕ (EDIT) ---
+@bot.message_handler(func=lambda m: m.text == "✏️ Изменить товар")
+def edit_start(m):
     if m.from_user.id not in ADMIN_IDS:
         return
     stores = get_all_stores()
@@ -468,21 +574,21 @@ def give_start(m):
     for s in stores:
         kb.add(
             types.InlineKeyboardButton(
-                s["title"], callback_data=f"give_s_{s['store_id']}"
+                s["title"], callback_data=f"edit_s_{s['store_id']}"
             )
         )
     bot.send_message(m.chat.id, "Категория?", reply_markup=kb)
 
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("give_s_"))
-def give_list(c):
+@bot.callback_query_handler(func=lambda c: c.data.startswith("edit_s_"))
+def edit_list_prods(c):
     sid = c.data.split("_")[2]
     prods = get_products_by_store(sid)
     kb = types.InlineKeyboardMarkup()
     for p in prods:
         kb.add(
             types.InlineKeyboardButton(
-                p["name"], callback_data=f"give_p_{p['product_id']}"
+                p["name"], callback_data=f"edit_p_{p['product_id']}"
             )
         )
     bot.edit_message_text(
@@ -490,29 +596,35 @@ def give_list(c):
     )
 
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("give_p_"))
-def give_ask(c):
-    admin_state[c.from_user.id] = {"pid": c.data.split("_")[2]}
-    msg = bot.send_message(c.message.chat.id, "ID пользователя?")
-    bot.register_next_step_handler(msg, give_final)
+@bot.callback_query_handler(func=lambda c: c.data.startswith("edit_p_"))
+def edit_field(c):
+    pid = c.data.split("_")[2]
+    admin_state[c.from_user.id] = {"edit_pid": pid}
+    kb = types.InlineKeyboardMarkup()
+    kb.add(
+        types.InlineKeyboardButton("Название", callback_data="edf_name"),
+        types.InlineKeyboardButton("Цена", callback_data="edf_price_usd"),
+    )
+    bot.edit_message_text(
+        "Что меняем?", c.message.chat.id, c.message.message_id, reply_markup=kb
+    )
 
 
-def give_final(m):
-    try:
-        uid = int(m.text)
-        pid = admin_state[m.from_user.id]["pid"]
-        details = get_product_details_by_id(pid)
-        if not details:
-            return bot.send_message(m.chat.id, "Нет товара.")
+@bot.callback_query_handler(func=lambda c: c.data.startswith("edf_"))
+def edit_val(c):
+    field = c.data.replace("edf_", "")
+    admin_state[c.from_user.id]["edit_field"] = field
+    msg = bot.send_message(c.message.chat.id, "Новое значение:")
+    bot.register_next_step_handler(msg, edit_save)
 
-        msg = f"🎁 <b>ВАМ ПОДАРОК!</b>\n📦 {details['product_name']}\n📍 {details['delivery_text']}"
-        bot.send_photo(uid, details["file_path"], caption=msg, parse_mode="HTML")
-        mark_product_as_sold(pid)
 
-        fake_oid = f"GIFT-{int(time.time())}"
-        add_order(uid, pid, 0, "Gift", fake_oid, "GIFT", "GIFT")
-        update_order(fake_oid, status="paid", delivery_status="delivered")
-
-        bot.send_message(m.chat.id, "✅ Выдано!")
-    except Exception as e:
-        bot.send_message(m.chat.id, f"Ошибка: {e}")
+def edit_save(m):
+    d = admin_state[m.from_user.id]
+    val = m.text
+    if d["edit_field"] == "price_usd":
+        try:
+            val = float(val)
+        except:
+            return bot.send_message(m.chat.id, "Ошибка.")
+    update_product_field(d["edit_pid"], d["edit_field"], val)
+    bot.send_message(m.chat.id, "Обновлено!")
