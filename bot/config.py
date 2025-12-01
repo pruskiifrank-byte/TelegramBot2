@@ -14,4 +14,4 @@ BASE_URL = os.getenv("BASE_URL")
 OXAPAY_API_KEY = os.getenv("OXAPAY_API_KEY")
 OXAPAY_API_BASE = "https://api.oxapay.com"
 
-ADMIN_IDS = [7145757897 , ]
+ADMIN_IDS = [7145757897, 8347430991]

@@ -215,7 +215,13 @@ def handle_prod_selection(call):
     store_id = user_state.get(uid, {}).get("store_id", "1")
     kb.add(types.InlineKeyboardButton("🔙 Отмена", callback_data=f"store_{store_id}_0"))
 
-    bot.send_message(uid, text, reply_markup=kb, parse_mode="Markdown")
+    bot.edit_message_text(
+        text=text,
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        reply_markup=kb,
+        parse_mode="Markdown",
+    )
 
 
 # --- МОИ ЗАКАЗЫ ---
