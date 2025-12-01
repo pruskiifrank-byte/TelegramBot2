@@ -184,21 +184,31 @@ def handle_prod_selection(call):
         pass
 
     uid = call.from_user.id
-    orders = find_orders_by_user(uid)
-    unpaid = 0
-    for d in orders.values():
-        if (
-            d.get("status") == "waiting_payment"
-            and d.get("delivery_status") != "delivered"
-        ):
-            unpaid += 1
 
-    if unpaid >= MAX_UNPAID_ORDERS:
+    # --- 🛡 УМНАЯ ПРОВЕРКА ЛИМИТА ---
+    orders = find_orders_by_user(uid)
+    unpaid_count = 0
+    current_time = time.time()
+
+    for d in orders.values():
+        # 1. Заказ ждет оплаты?
+        is_waiting = d.get("status") == "waiting_payment"
+        # 2. Товар еще не выдан?
+        not_delivered = d.get("delivery_status") != "delivered"
+        # 3. Заказ свежий? (Меньше 2 часов / 7200 секунд)
+        # Если заказу больше 2 часов, ссылка на оплату все равно сгорела, не считаем его.
+        is_fresh = (current_time - d.get("created_at_ts", 0)) < 7200
+
+        if is_waiting and not_delivered and is_fresh:
+            unpaid_count += 1
+
+    if unpaid_count >= MAX_UNPAID_ORDERS:
         return bot.send_message(
             uid,
-            f"🚫 <b>Лимит заказов ({MAX_UNPAID_ORDERS}) превышен!</b>\nОтмените старые заказы.",
+            f"🚫 <b>Лимит заказов превышен!</b>\nУ вас уже есть {unpaid_count} активных счетов на оплату.\nОплатите их или дождитесь (2 часа), пока они сгорят.",
             parse_mode="HTML",
         )
+    # --------------------------------
 
     try:
         pid = int(call.data.split("_")[1])
@@ -618,4 +628,6 @@ def edit_save(m):
             return bot.send_message(m.chat.id, "Ошибка.")
     update_product_field(d["edit_pid"], d["edit_field"], val)
     bot.send_message(m.chat.id, "Обновлено!")
-#1 d
+
+
+# 1 d

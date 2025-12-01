@@ -164,7 +164,7 @@ def get_order(order_id):
 
 def find_orders_by_user(user_id):
     query = """
-    SELECT o.order_id, o.status, o.price_usd, p.name, o.delivery_status, o.payment_url
+    SELECT o.order_id, o.status, o.price_usd, p.name, o.delivery_status, o.payment_url, o.created_at
     FROM orders o
     LEFT JOIN products p ON o.product_id = p.product_id
     WHERE o.user_id = %s 
@@ -174,14 +174,19 @@ def find_orders_by_user(user_id):
     orders_dict = {}
     if results:
         for row in results:
-            oid, status, price, p_name, d_status, pay_url = row
+            # Теперь распаковываем 7 значений (добавилось created_at)
+            oid, status, price, p_name, d_status, pay_url, created_at = row
+
             if not p_name:
                 p_name = "Удаленный товар"
+
             orders_dict[oid] = {
                 "status": status,
                 "price": float(price),
                 "product_name": p_name,
                 "delivery_status": d_status,
                 "payment_url": pay_url,
+                # Превращаем время в число (timestamp), чтобы удобно сравнивать
+                "created_at_ts": created_at.timestamp() if created_at else 0,
             }
     return orders_dict
