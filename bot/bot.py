@@ -618,3 +618,4 @@ def edit_save(m):
             return bot.send_message(m.chat.id, "Ошибка.")
     update_product_field(d["edit_pid"], d["edit_field"], val)
     bot.send_message(m.chat.id, "Обновлено!")
+#1 d
