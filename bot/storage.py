@@ -75,6 +75,7 @@ def get_product_details_by_id(product_id):
             "delivery_text": row[2],
             "product_name": row[3],
             "shop_title": row[4],
+            "address": row[5],
         }
     return None
 
@@ -92,10 +93,16 @@ def mark_product_as_sold(product_id):
 
 def insert_product(store_id, name, price, delivery_text, file_path):
     query = """
-    INSERT INTO products (store_id, name, price_usd, delivery_text, file_path, is_sold)
+    INSERT INTO products (store_id, name, price_usd, delivery_text, file_path, address, is_sold)
     VALUES (%s, %s, %s, %s, %s, FALSE);
     """
     execute_query(query, (store_id, name, price, delivery_text, file_path))
+
+
+def cancel_order_db(order_id):
+    """Меняет статус заказа на cancelled."""
+    query = "UPDATE orders SET status = 'cancelled' WHERE order_id = %s;"
+    execute_query(query, (order_id,))
 
 
 def update_product_field(product_id, field, value):
@@ -172,7 +179,7 @@ def get_order(order_id):
             "product_id": result[0][2],
             "delivery_status": result[0][6],
             "status": result[0][5],
-            "oxapay_track_id": result[0][7]
+            "oxapay_track_id": result[0][7],
         }
     return None
 

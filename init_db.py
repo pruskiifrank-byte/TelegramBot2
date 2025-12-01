@@ -96,3 +96,19 @@ if __name__ == "__main__":
     populate_stores()  # Создаст категории
     update_table_structure()  # Добавит is_sold, если нет
     print("✅ База данных полностью готова.")
+
+
+def add_address_column():
+    print("🛠 Добавление колонки адреса...")
+    try:
+        execute_query(
+            "ALTER TABLE products ADD COLUMN address TEXT DEFAULT 'Не указан';"
+        )
+        print("✅ Колонка 'address' успешно добавлена в таблицу products.")
+    except Exception as e:
+        print(f"ℹ️ Колонка уже есть или ошибка: {e}")
+
+
+if __name__ == "__main__":
+    # ... ваши старые вызовы ...
+    add_address_column()  # <--- ЗАПУСТИТЕ ЭТО

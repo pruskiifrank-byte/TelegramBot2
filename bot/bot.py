@@ -31,6 +31,7 @@ flood_control = {}
 PRODUCTS_PER_PAGE = 5
 FLOOD_LIMIT = 0.5
 
+MAX_UNPAID_ORDERS = 3
 
 def anti_flood(func):
     def wrapper(message):
@@ -225,8 +226,9 @@ def handle_prod_selection(call):
     text = (
         f"🧾 **Заказ №{real_oid}**\n\n"
         f"📦 Товар: **{details['product_name']}**\n"
+        f"📍 Район: **{details.get('address', 'Не указан')}**\n"  # <-- ПОКАЗЫВАЕМ АДРЕС
         f"💰 К оплате: **{details['price_usd']} $**\n\n"
-        f"⚠️ _Фото и данные вы получите автоматически после оплаты._"
+        f"⚠️ _Фото и точные координаты придут после оплаты._"
     )
 
     kb = types.InlineKeyboardMarkup()
@@ -264,45 +266,67 @@ def handle_prod_selection(call):
 def my_orders(message):
     orders = find_orders_by_user(message.chat.id)
     if not orders:
-        return bot.send_message(message.chat.id, "📭 У вас пока нет заказов.")
+        return bot.send_message(message.chat.id, "📭 История пуста.")
 
-    text = "📦 <b>ВАШИ ПОСЛЕДНИЕ ЗАКАЗЫ:</b>\n\n"
-
-    # Отправляем каждый заказ отдельным сообщением или блоком с кнопкой
-    # Для удобства сделаем список с инлайн-кнопками под сообщением, если заказов немного
-    # Но проще сделать так:
+    text = "📦 <b>ВАШИ ЗАКАЗЫ (Последние 5):</b>\n\n"
 
     for i, (oid, data) in enumerate(orders.items()):
         if i >= 5:
             break
 
-        status_text = "❌ Ошибка"
+        status = data["status"]
+        status_line = f"Статус: {status}"
         kb = types.InlineKeyboardMarkup()
 
         if data["delivery_status"] == "delivered":
-            status_text = "🎁 ВЫДАН"
-        elif data["status"] == "paid":
-            status_text = "✅ ОПЛАЧЕН (Выдача...)"
-        elif data["status"] == "waiting_payment":
-            status_text = "⏳ ОЖИДАЕТ ОПЛАТЫ"
-            # Кнопка проверки оплаты
-            kb.add(
+            status_line = "🎁 <b>ВЫДАН</b>"
+        elif status == "paid":
+            status_line = "✅ <b>ОПЛАЧЕН</b>"
+        elif status == "waiting_payment":
+            status_line = "⏳ <b>ОЖИДАЕТ ОПЛАТЫ</b>"
+            # Кнопки для неоплаченных
+            kb.row(
                 types.InlineKeyboardButton(
-                    "🔄 Проверить оплату / Получить", callback_data=f"check_{oid}"
-                )
+                    "🔄 Проверить", callback_data=f"check_{oid}"
+                ),
+                types.InlineKeyboardButton(
+                    "❌ Отменить", callback_data=f"cancel_{oid}"
+                ),  # <-- КНОПКА ОТМЕНЫ
             )
             kb.add(
                 types.InlineKeyboardButton(
                     "💳 Ссылка на оплату", url=data["payment_url"]
                 )
             )
+        elif status == "cancelled":
+            status_line = "🗑 <b>ОТМЕНЕН</b>"
 
-        msg_text = (
+        text += (
             f"🛒 <b>{data['product_name']}</b>\n"
             f"🆔 <code>{oid}</code> | 💰 {data['price']} $\n"
-            f"Статус: {status_text}"
+            f"{status_line}\n"
+            f"➖➖➖➖➖➖➖➖➖➖\n"
         )
-        bot.send_message(message.chat.id, msg_text, reply_markup=kb, parse_mode="HTML")
+
+
+# --- ОБРАБОТЧИК ОТМЕНЫ ---
+@bot.callback_query_handler(func=lambda c: c.data.startswith("cancel_"))
+def cancel_order_handler(call):
+    oid = call.data.split("_")[1]
+
+    # Импортируем функцию отмены
+    from bot.storage import cancel_order_db
+
+    cancel_order_db(oid)
+
+    bot.answer_callback_query(call.id, "Заказ отменен.")
+
+    # Обновляем сообщение, чтобы показать новый статус
+    bot.edit_message_text(
+        f"🗑 Заказ {oid} был успешно отменен.\nВы можете выбрать новый товар.",
+        call.message.chat.id,
+        call.message.message_id,
+    )
 
 
 # ==========================================
@@ -541,45 +565,69 @@ def adm_add(m):
     bot.send_message(m.chat.id, "Куда добавляем?", reply_markup=kb)
 
 
+# ... Внутри bot/bot.py ...
+
+
+# Цепочка добавления товара
 @bot.callback_query_handler(func=lambda c: c.data.startswith("aadd_s_"))
 def aadd_name(c):
     admin_state[c.from_user.id] = {"sid": c.data.split("_")[2]}
-    msg = bot.send_message(c.message.chat.id, "Название?")
+    msg = bot.send_message(c.message.chat.id, "1️⃣ Введите Название товара:")
     bot.register_next_step_handler(msg, aadd_price)
 
 
 def aadd_price(m):
     admin_state[m.from_user.id]["name"] = m.text
-    msg = bot.send_message(m.chat.id, "Цена (USD)?")
-    bot.register_next_step_handler(msg, aadd_desc)
+    msg = bot.send_message(m.chat.id, "2️⃣ Введите Цену (USD)? (например: 5.5)")
+    bot.register_next_step_handler(msg, aadd_address)
+
+
+# --- НОВЫЙ ШАГ: АДРЕС ---
+def aadd_address(m):
+    try:
+        admin_state[m.from_user.id]["price"] = float(m.text.replace(",", "."))
+        msg = bot.send_message(
+            m.chat.id,
+            "3️⃣ Введите **Район/Адрес** (Это видят ВСЕ до покупки, например: 'Центр, Парк'):",
+            parse_mode="Markdown",
+        )
+        bot.register_next_step_handler(msg, aadd_desc)
+    except:
+        bot.send_message(m.chat.id, "❌ Это не число! Попробуйте заново /admin")
 
 
 def aadd_desc(m):
-    try:
-        admin_state[m.from_user.id]["price"] = float(m.text.replace(",", "."))
-        msg = bot.send_message(m.chat.id, "Описание (будет выдано ПОСЛЕ оплаты):")
-        bot.register_next_step_handler(msg, aadd_photo)
-    except:
-        bot.send_message(m.chat.id, "Число!")
+    admin_state[m.from_user.id]["address"] = m.text
+    msg = bot.send_message(
+        m.chat.id,
+        "4️⃣ Введите **Секретное описание/Клад** (Это увидит только ПОКУПАТЕЛЬ):",
+        parse_mode="Markdown",
+    )
+    bot.register_next_step_handler(msg, aadd_photo)
 
 
 def aadd_photo(m):
     admin_state[m.from_user.id]["desc"] = m.text
-    msg = bot.send_message(m.chat.id, "Фото товара:")
+    msg = bot.send_message(m.chat.id, "5️⃣ Отправьте **Фото** товара:")
     bot.register_next_step_handler(msg, aadd_fin)
 
 
 def aadd_fin(m):
     if not m.photo:
-        return
+        return bot.send_message(m.chat.id, "Нужно фото!")
+
+    data = admin_state[m.from_user.id]
     insert_product(
-        admin_state[m.from_user.id]["sid"],
-        admin_state[m.from_user.id]["name"],
-        admin_state[m.from_user.id]["price"],
-        admin_state[m.from_user.id]["desc"],
+        data["sid"],
+        data["name"],
+        data["price"],
+        data["desc"],
         m.photo[-1].file_id,
+        data["address"],  # Сохраняем адрес
     )
-    bot.send_message(m.chat.id, "✅ Добавлено!")
+    bot.send_message(
+        m.chat.id, f"✅ Товар '{data['name']}' добавлен!\n📍 Адрес: {data['address']}"
+    )
 
 
 # --- 📦 МОИ ЗАКАЗЫ (ОБНОВЛЕНИЕ) ---
