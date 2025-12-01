@@ -1,14 +1,13 @@
 # init_db.py
 from bot.db import execute_query
 
-# Каталог для примера (пустой, так как добавляем через админку)
 CATALOG = {"test": {"title": "📂 Тестовая категория"}}
 
 
 def create_tables():
     print("🛠 Проверка и обновление таблиц...")
 
-    # 1. Таблица пользователей (НОВАЯ)
+    # 1. Users
     execute_query(
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -20,7 +19,7 @@ def create_tables():
     """
     )
 
-    # 2. Магазины
+    # 2. Stores
     execute_query(
         """
         CREATE TABLE IF NOT EXISTS stores (
@@ -30,7 +29,7 @@ def create_tables():
     """
     )
 
-    # 3. Товары
+    # 3. Products
     execute_query(
         """
         CREATE TABLE IF NOT EXISTS products (
@@ -44,7 +43,7 @@ def create_tables():
     """
     )
 
-    # 4. Заказы
+    # 4. Orders
     execute_query(
         """
         CREATE TABLE IF NOT EXISTS orders (
@@ -62,53 +61,40 @@ def create_tables():
         );
     """
     )
-
-    print("✅ Таблицы готовы.")
+    print("✅ Базовые таблицы готовы.")
 
 
 def populate_stores():
-    # Проверка, есть ли магазины, если нет - создаем тестовый
     res = execute_query("SELECT count(*) FROM stores;", fetch=True)
     if res and res[0][0] == 0:
-        print("🏪 Создание базовых категорий...")
+        print("🏪 Создание категорий...")
         for key, data in CATALOG.items():
             execute_query("INSERT INTO stores (title) VALUES (%s)", (data["title"],))
 
 
-if __name__ == "__main__":
-    create_tables()
-    populate_stores()
-    # init_db.py (добавь эту функцию и вызови её)
-
-
 def update_table_structure():
-    print("🛠 Обновление структуры таблиц...")
-    # Добавляем колонку is_sold, если её нет
+    print("🛠 Обновление колонок...")
+
+    # is_sold
     try:
         execute_query("ALTER TABLE products ADD COLUMN is_sold BOOLEAN DEFAULT FALSE;")
         print("✅ Колонка 'is_sold' добавлена.")
-    except Exception as e:
-        print(f"ℹ️ Колонка уже есть или ошибка: {e}")
+    except Exception:
+        pass  # Скорее всего уже есть
 
-
-if __name__ == "__main__":
-    create_tables()  # Создаст таблицы
-    populate_stores()  # Создаст категории
-    update_table_structure()  # Добавит is_sold, если нет
-    print("✅ База данных полностью готова.")
-
-
-def add_address_column():
-    print("🛠 Добавление колонки адреса...")
+    # address
     try:
         execute_query(
             "ALTER TABLE products ADD COLUMN address TEXT DEFAULT 'Не указан';"
         )
-        print("✅ Колонка 'address' успешно добавлена в таблицу products.")
-    except Exception as e:
-        print(f"ℹ️ Колонка уже есть или ошибка: {e}")
+        print("✅ Колонка 'address' добавлена.")
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
-    # ... ваши старые вызовы ...
-    add_address_column()  # <--- ЗАПУСТИТЕ ЭТО
+    # ЗАПУСКАЕМ ВСЁ ПО ПОРЯДКУ
+    create_tables()
+    populate_stores()
+    update_table_structure()
+    print("🚀 База данных полностью готова к работе!")
