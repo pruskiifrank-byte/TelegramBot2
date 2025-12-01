@@ -1,35 +1,30 @@
-# test_key.py
+
 import requests
+import json
 
-# --- ВСТАВЬТЕ СЮДА ВАШ КЛЮЧ ---
-MY_KEY = "CQGVUT-QRJJOX-YQQHSJ-C7AGTR"
-# ------------------------------
-
-url = "https://api.oxapay.com/merchant/request"
+url = 'https://api.oxapay.com/v1/payment/invoice'
 
 data = {
-    "merchant": MY_KEY,
-    "amount": 1,
-    "currency": "USD",
-    "lifeTime": 30,
-    "feePaidByPayer": 0,
-    "underPaidCover": 0,
-    "callbackUrl": "https://google.com",
-    "description": "Test",
-    "orderId": "TEST-123",
+   "amount": 100,
+   "currency": "USD",
+   "lifetime": 30,
+   "fee_paid_by_payer": 1,
+   "under_paid_coverage": 2.5,
+   "to_currency": "USDT",
+   "auto_withdrawal": False,
+   "mixed_payment": True,
+   "return_url": "https://example.com/success",
+   "order_id": "ORD-12345",
+   "thanks_message": "Thanks message",
+   "description": "Order #12345",
+   "sandbox": False
 }
 
-print(f"📡 Проверяем ключ: {MY_KEY} ...")
+headers = {
+   'merchant_api_key': 'MD8GIN-TNR7WJ-TXN18N-62DE3D',
+   'Content-Type': 'application/json'
+}
 
-try:
-    response = requests.post(url, json=data)
-    print(f"Ответ сервера: {response.status_code}")
-    print(f"Тело ответа: {response.text}")
-
-    json_resp = response.json()
-    if json_resp.get("result") == 100:
-        print("\n✅ УСПЕХ! Ключ рабочий. Ссылка:", json_resp.get("payLink"))
-    else:
-        print("\n❌ ОШИБКА! Ключ неверный или не того типа.")
-except Exception as e:
-    print(f"Ошибка соединения: {e}")
+response = requests.post(url, data=json.dumps(data), headers=headers)
+result = response.json()
+print(result)

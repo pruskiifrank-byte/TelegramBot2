@@ -165,8 +165,16 @@ def noop(c):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("prod_"))
 @bot.callback_query_handler(func=lambda c: c.data.startswith("prod_"))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("prod_"))
 def handle_prod_selection(call):
-    # 1. Получаем данные
+    # 1. СРАЗУ отвечаем Телеграму, чтобы кнопка перестала "крутиться"
+    # Это предотвратит ошибку "Query is too old"
+    try:
+        bot.answer_callback_query(call.id)
+    except:
+        pass
+
+    # 2. Получаем данные
     try:
         pid = int(call.data.split("_")[1])
         details = get_product_details_by_id(pid)
@@ -174,22 +182,19 @@ def handle_prod_selection(call):
         details = None
 
     if not details:
-        return bot.answer_callback_query(call.id, "Ошибка товара")
+        # Если товара нет, отправляем сообщение (так как answer_callback_query уже был)
+        return bot.send_message(call.from_user.id, "❌ Ошибка: Товар не найден.")
 
     uid = call.from_user.id
     temp_oid = f"ORD-{int(time.time())}-{uid}"
 
-    # 2. Создаем инвойс
+    # 3. Создаем инвойс
+    # Бот может "думать" здесь 1-2 секунды, но ошибки уже не будет
     res = create_invoice(uid, details["price_usd"], temp_oid)
 
-    # 3. ПРОВЕРКА: Если payment.py вернул None (ошибку), мы НЕ идем дальше
     if not res:
-        return bot.send_message(
-            uid,
-            "❌ Ошибка платежной системы (не удалось создать ссылку). Попробуйте позже.",
-        )
+        return bot.send_message(uid, "❌ Ошибка платежной системы. Попробуйте позже.")
 
-    # Если мы здесь, значит pay_url точно есть
     pay_url, track_id = res
 
     # 4. Сохраняем и отправляем
@@ -205,15 +210,12 @@ def handle_prod_selection(call):
     )
 
     kb = types.InlineKeyboardMarkup()
-    # Теперь тут точно будет ссылка, и бот не упадет
     kb.add(types.InlineKeyboardButton("💳 Оплатить (Крипта)", url=pay_url))
 
-    # Кнопка отмены
     store_id = user_state.get(uid, {}).get("store_id", "1")
     kb.add(types.InlineKeyboardButton("🔙 Отмена", callback_data=f"store_{store_id}_0"))
 
     bot.send_message(uid, text, reply_markup=kb, parse_mode="Markdown")
-    bot.answer_callback_query(call.id)
 
 
 # --- МОИ ЗАКАЗЫ ---
