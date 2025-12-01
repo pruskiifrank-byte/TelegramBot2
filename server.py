@@ -2,6 +2,7 @@
 from flask import Flask, request, abort
 import telebot
 import os
+import json
 from bot.config import TELEGRAM_TOKEN, OXAPAY_API_KEY, ADMIN_IDS
 from bot.bot import bot
 
@@ -85,8 +86,32 @@ def telegram_webhook():
 
 
 @app.route("/oxapay/ipn", methods=["POST"])
+# server.py (часть кода)
+
+
+@app.route("/oxapay/ipn", methods=["POST"])
 def oxapay_ipn():
-    data = request.get_json()
+    try:
+        data = request.get_json()
+    except:
+        return "Invalid JSON", 400
+
+    # --- 🔥 НОВАЯ ЧАСТЬ: ОТПРАВКА ЛОГА В ТЕЛЕГРАМ ---
+    # Это отправит вам сырые данные от платежки, чтобы вы видели, что происходит
+    try:
+        # Формируем красивое сообщение с данными
+        debug_message = (
+            f"🔔 <b>OxaPay Callback!</b>\n" f"<code>{json.dumps(data, indent=2)}</code>"
+        )
+
+        # Отправляем всем админам
+        for admin_id in ADMIN_IDS:
+            bot.send_message(admin_id, debug_message, parse_mode="HTML")
+
+    except Exception as e:
+        print(f"Ошибка отправки лога в Telegram: {e}")
+    # --------------------------------------------------
+
     order_id = data.get("order_id")
     track_id = data.get("track_id")
     status = data.get("status")
@@ -95,13 +120,16 @@ def oxapay_ipn():
     if status in ["paid", "confirmed", "complete"]:
         # 1. Защита от фейков
         if not verify_payment_via_api(track_id):
+            # Тоже сообщим админу о попытке взлома
+            for admin_id in ADMIN_IDS:
+                bot.send_message(
+                    admin_id,
+                    f"🚨 <b>ВНИМАНИЕ!</b> Фейковый callback!\nTrack ID: {track_id}",
+                    parse_mode="HTML",
+                )
             return "Fake Callback", 400
 
         # 2. Выдача
         give_product(get_order(order_id)["user_id"], order_id)
 
     return "OK", 200
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
