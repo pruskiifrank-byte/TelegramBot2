@@ -166,15 +166,38 @@ def noop(c):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("prod_"))
 @bot.callback_query_handler(func=lambda c: c.data.startswith("prod_"))
 @bot.callback_query_handler(func=lambda c: c.data.startswith("prod_"))
+# bot/bot.py
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("prod_"))
 def handle_prod_selection(call):
-    # 1. СРАЗУ отвечаем Телеграму, чтобы кнопка перестала "крутиться"
-    # Это предотвратит ошибку "Query is too old"
+    # 1. Сразу отвечаем Телеграму
     try:
         bot.answer_callback_query(call.id)
     except:
         pass
 
-    # 2. Получаем данные
+    uid = call.from_user.id
+
+    # --- 🛑 ПРОВЕРКА ЛИМИТА ЗАКАЗОВ (ВОЗВРАЩЕНО) ---
+    orders = find_orders_by_user(uid)
+    unpaid_count = 0
+    if orders:
+        for data in orders.values():
+            if data.get("status") == "waiting_payment":
+                unpaid_count += 1
+
+    if unpaid_count >= MAX_UNPAID_ORDERS:
+        return bot.send_message(
+            uid,
+            f"🚫 **Лимит превышен!**\n"
+            f"У вас уже {unpaid_count} неоплаченных заказа.\n"
+            f"Оплатите или отмените старые заказы в меню '📦 Мои заказы'.",
+            parse_mode="Markdown",
+        )
+    # ------------------------------------------------
+
+    # 2. Получаем данные о товаре
     try:
         pid = int(call.data.split("_")[1])
         details = get_product_details_by_id(pid)
@@ -182,14 +205,11 @@ def handle_prod_selection(call):
         details = None
 
     if not details:
-        # Если товара нет, отправляем сообщение (так как answer_callback_query уже был)
-        return bot.send_message(call.from_user.id, "❌ Ошибка: Товар не найден.")
+        return bot.send_message(uid, "❌ Ошибка: Товар не найден.")
 
-    uid = call.from_user.id
     temp_oid = f"ORD-{int(time.time())}-{uid}"
 
     # 3. Создаем инвойс
-    # Бот может "думать" здесь 1-2 секунды, но ошибки уже не будет
     res = create_invoice(uid, details["price_usd"], temp_oid)
 
     if not res:
@@ -197,7 +217,7 @@ def handle_prod_selection(call):
 
     pay_url, track_id = res
 
-    # 4. Сохраняем и отправляем
+    # 4. Сохраняем заказ
     real_oid = add_order(
         uid, pid, details["price_usd"], "Digital/Online", temp_oid, track_id, pay_url
     )
@@ -207,6 +227,20 @@ def handle_prod_selection(call):
         f"📦 Товар: **{details['product_name']}**\n"
         f"💰 К оплате: **{details['price_usd']} $**\n\n"
         f"⚠️ _Фото и данные вы получите автоматически после оплаты._"
+    )
+
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("💳 Оплатить (Крипта)", url=pay_url))
+
+    store_id = user_state.get(uid, {}).get("store_id", "1")
+    kb.add(types.InlineKeyboardButton("🔙 Отмена", callback_data=f"store_{store_id}_0"))
+
+    bot.edit_message_text(
+        text=text,
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        reply_markup=kb,
+        parse_mode="Markdown",
     )
 
     kb = types.InlineKeyboardMarkup()
