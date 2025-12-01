@@ -83,7 +83,7 @@ def cmd_start(message):
     )
     bot.send_message(
         message.chat.id,
-        f"👋 Привет, {message.from_user.first_name}!\nДобро пожаловать в магазин!\n🎁 Выбирай быстрее. (Или я заберу это себе!)",
+        f"👋 Привет, {message.from_user.first_name}!\nДобро пожаловать в магазин!",
         reply_markup=main_menu(),
     )
 
@@ -231,9 +231,7 @@ def handle_prod_selection(call):
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("💳 Оплатить", url=pay_url))
     sid = user_state.get(uid, {}).get("store_id", "1")
-    kb.add(
-        types.InlineKeyboardButton("🔙 Отмена", callback_data="cmd_buy_callback")
-    )  # Исправил возврат
+    kb.add(types.InlineKeyboardButton("🔙 Отмена", callback_data="cmd_buy_callback"))
 
     try:
         bot.edit_message_text(
@@ -321,9 +319,7 @@ def check_pay(call):
         )
 
         try:
-            # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ ДЛЯ АЛЬБОМОВ
             send_product_visuals(call.from_user.id, details["file_path"], msg)
-
             update_order(oid, status="paid", delivery_status="delivered")
             mark_product_as_sold(order["product_id"])
             bot.edit_message_text(
@@ -399,7 +395,7 @@ def aadd_step4(m):
 
 def aadd_step5(m):
     admin_state[m.from_user.id]["desc"] = m.text
-    admin_state[m.from_user.id]["photos"] = []  # Список фото
+    admin_state[m.from_user.id]["photos"] = []
     msg = bot.send_message(m.chat.id, "5️⃣ Отправьте **Первое фото**:")
     bot.register_next_step_handler(msg, aadd_photo_loop)
 
@@ -489,9 +485,7 @@ def give_final(m):
             f"—————————————"
         )
 
-        # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ ДЛЯ АЛЬБОМОВ
         send_product_visuals(uid, details["file_path"], msg)
-
         mark_product_as_sold(pid)
 
         fake_oid = f"GIFT-{int(time.time())}"

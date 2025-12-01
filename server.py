@@ -1,13 +1,12 @@
 # server.py
 from flask import Flask, request, abort
 import telebot
+from telebot.types import InputMediaPhoto
 import os
 import json
-from telebot.types import InputMediaPhoto
 from bot.config import TELEGRAM_TOKEN, OXAPAY_API_KEY, ADMIN_IDS
 from bot.bot import bot
 
-# ВАЖНО: Импортируем mark_product_as_sold
 from bot.storage import (
     update_order,
     get_order,
@@ -50,22 +49,31 @@ def give_product(user_id, order_id):
     )
 
     try:
-        # --- НОВАЯ ЛОГИКА ОТПРАВКИ АЛЬБОМА ---
+        # --- ЛОГИКА ОТПРАВКИ (ФОТО ИЛИ АЛЬБОМ) ---
         photos = prod["file_path"].split(",")
 
         if len(photos) == 1:
+            # Одно фото
             bot.send_photo(user_id, photos[0], caption=text, parse_mode="HTML")
         else:
+            # Альбом (Media Group)
             media = []
             for i, file_id in enumerate(photos):
                 if i == 0:
+                    # Подпись только к первому фото
                     media.append(
                         InputMediaPhoto(file_id, caption=text, parse_mode="HTML")
                     )
                 else:
                     media.append(InputMediaPhoto(file_id))
             bot.send_media_group(user_id, media)
+        # -----------------------------------------
+
+        # Обновляем статус заказа
         update_order(order_id, delivery_status="delivered")
+
+        # Убираем товар с витрины
+        mark_product_as_sold(order["product_id"])
 
         return True
     except telebot.apihelper.ApiTelegramException as e:
@@ -95,41 +103,31 @@ def telegram_webhook():
 
 
 @app.route("/oxapay/ipn", methods=["POST"])
-# server.py (часть кода)
-
-
-@app.route("/oxapay/ipn", methods=["POST"])
 def oxapay_ipn():
     try:
         data = request.get_json()
     except:
         return "Invalid JSON", 400
 
-    # --- 🔥 НОВАЯ ЧАСТЬ: ОТПРАВКА ЛОГА В ТЕЛЕГРАМ ---
-    # Это отправит вам сырые данные от платежки, чтобы вы видели, что происходит
+    # --- ОТПРАВКА ЛОГА В ТЕЛЕГРАМ (DEBUG) ---
     try:
-        # Формируем красивое сообщение с данными
         debug_message = (
             f"🔔 <b>OxaPay Callback!</b>\n" f"<code>{json.dumps(data, indent=2)}</code>"
         )
-
-        # Отправляем всем админам
         for admin_id in ADMIN_IDS:
             bot.send_message(admin_id, debug_message, parse_mode="HTML")
-
     except Exception as e:
         print(f"Ошибка отправки лога в Telegram: {e}")
-    # --------------------------------------------------
+    # ----------------------------------------
 
-    order_id = data.get("order_id")
-    track_id = data.get("track_id")
+    order_id = data.get("order_id") or data.get("orderId")
+    track_id = data.get("track_id") or data.get("trackId")
     status = data.get("status")
 
     # Если статус 'paid', 'confirmed' или 'complete'
     if status in ["paid", "confirmed", "complete"]:
         # 1. Защита от фейков
         if not verify_payment_via_api(track_id):
-            # Тоже сообщим админу о попытке взлома
             for admin_id in ADMIN_IDS:
                 bot.send_message(
                     admin_id,
@@ -138,7 +136,14 @@ def oxapay_ipn():
                 )
             return "Fake Callback", 400
 
-        # 2. Выдача
+        # 2. Обновление статуса в БД
+        handle_oxapay_callback(data)
+
+        # 3. Выдача товара
         give_product(get_order(order_id)["user_id"], order_id)
 
     return "OK", 200
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
