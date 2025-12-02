@@ -1,8 +1,11 @@
 # bot/storage.py
 from .db import execute_query
 
+# ==========================================
+#              ПОЛЬЗОВАТЕЛИ
+# ==========================================
 
-# --- ПОЛЬЗОВАТЕЛИ ---
+
 def upsert_user(user_id, username, first_name):
     query = """
     INSERT INTO users (user_id, username, first_name)
@@ -18,7 +21,11 @@ def get_all_users():
     return [row[0] for row in res] if res else []
 
 
-# --- МАГАЗИНЫ И ТОВАРЫ ---
+# ==========================================
+#           МАГАЗИНЫ И ТОВАРЫ
+# ==========================================
+
+
 def get_all_stores():
     query = "SELECT store_id, title FROM stores ORDER BY store_id;"
     results = execute_query(query, fetch=True)
@@ -31,7 +38,7 @@ def get_all_stores():
 
 def get_products_by_store(store_id):
     """
-    Возвращает все непроданные товары из магазина.
+    Возвращает ВСЕ товары (для Админки и простых списков).
     """
     query = """
     SELECT product_id, name, price_usd 
@@ -47,6 +54,50 @@ def get_products_by_store(store_id):
                 {"product_id": row[0], "name": row[1], "price_usd": float(row[2])}
             )
     return products_list
+
+
+def get_unique_products_by_store(store_id):
+    """
+    Возвращает УНИКАЛЬНЫЕ названия товаров (для меню выбора района).
+    """
+    query = """
+    SELECT DISTINCT ON (name) product_id, name, price_usd 
+    FROM products 
+    WHERE store_id = %s AND is_sold = FALSE 
+    ORDER BY name, product_id;
+    """
+    results = execute_query(query, (store_id,), fetch=True)
+    products_list = []
+    if results:
+        for row in results:
+            # ref_id нужен просто как ссылка на группу товаров с этим именем
+            products_list.append(
+                {"ref_id": row[0], "name": row[1], "price_usd": float(row[2])}
+            )
+    return products_list
+
+
+def get_available_items_by_name(name):
+    """
+    Ищет все товары с таким названием, чтобы показать доступные районы.
+    """
+    query = """
+    SELECT product_id, address, price_usd 
+    FROM products 
+    WHERE name = %s AND is_sold = FALSE;
+    """
+    results = execute_query(query, (name,), fetch=True)
+    items = []
+    if results:
+        for row in results:
+            items.append(
+                {
+                    "product_id": row[0],
+                    "address": row[1] if row[1] else "Не указан",
+                    "price": float(row[2]),
+                }
+            )
+    return items
 
 
 def get_product_details_by_id(product_id):
@@ -75,9 +126,12 @@ def mark_product_as_sold(product_id):
     execute_query(query, (product_id,))
 
 
-# --- АДМИНКА ---
+# ==========================================
+#           АДМИНКА (РЕДАКТИРОВАНИЕ)
+# ==========================================
+
+
 def insert_product(store_id, name, price, delivery_text, file_path, address):
-    """Добавляет товар (с адресом и списком фото)."""
     query = """
     INSERT INTO products (store_id, name, price_usd, delivery_text, file_path, address, is_sold)
     VALUES (%s, %s, %s, %s, %s, %s, FALSE);
@@ -97,7 +151,11 @@ def delete_product(product_id):
     execute_query("DELETE FROM products WHERE product_id = %s;", (product_id,))
 
 
-# --- ЗАКАЗЫ ---
+# ==========================================
+#                ЗАКАЗЫ
+# ==========================================
+
+
 def add_order(
     user_id,
     product_id,
