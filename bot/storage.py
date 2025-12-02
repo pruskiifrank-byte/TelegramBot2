@@ -29,45 +29,24 @@ def get_all_stores():
     return stores_list
 
 
-def get_unique_products_by_store(store_id):
+def get_products_by_store(store_id):
     """
-    Возвращает список УНИКАЛЬНЫХ названий товаров в магазине.
-    Используем DISTINCT ON (name), чтобы не дублировать кнопки.
+    Возвращает все непроданные товары из магазина.
     """
     query = """
-    SELECT DISTINCT ON (name) product_id, name, price_usd 
+    SELECT product_id, name, price_usd 
     FROM products 
     WHERE store_id = %s AND is_sold = FALSE 
-    ORDER BY name, product_id;
+    ORDER BY price_usd;
     """
     results = execute_query(query, (store_id,), fetch=True)
     products_list = []
     if results:
         for row in results:
-            # Мы берем ID первого попавшегося товара просто как "ссылку" на группу
             products_list.append(
-                {"ref_id": row[0], "name": row[1], "price_usd": float(row[2])}
+                {"product_id": row[0], "name": row[1], "price_usd": float(row[2])}
             )
     return products_list
-
-
-def get_available_items_by_name(name):
-    """
-    Ищет все доступные товары с таким названием (чтобы показать районы).
-    """
-    query = """
-    SELECT product_id, address, price_usd 
-    FROM products 
-    WHERE name = %s AND is_sold = FALSE;
-    """
-    results = execute_query(query, (name,), fetch=True)
-    items = []
-    if results:
-        for row in results:
-            items.append(
-                {"product_id": row[0], "address": row[1], "price": float(row[2])}
-            )
-    return items
 
 
 def get_product_details_by_id(product_id):
@@ -98,6 +77,7 @@ def mark_product_as_sold(product_id):
 
 # --- АДМИНКА ---
 def insert_product(store_id, name, price, delivery_text, file_path, address):
+    """Добавляет товар (с адресом и списком фото)."""
     query = """
     INSERT INTO products (store_id, name, price_usd, delivery_text, file_path, address, is_sold)
     VALUES (%s, %s, %s, %s, %s, %s, FALSE);
@@ -171,6 +151,7 @@ def get_order(order_id):
     query = "SELECT * FROM orders WHERE order_id = %s;"
     result = execute_query(query, (order_id,), fetch=True)
     if result:
+        # 0:order_id, 1:user_id, 2:product_id, 3:pickup, 4:price, 5:status, 6:deliv_status, 7:track_id
         return {
             "order_id": result[0][0],
             "user_id": result[0][1],
