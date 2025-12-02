@@ -8,8 +8,7 @@ from bot.config import TELEGRAM_TOKEN, ADMIN_IDS
 from bot.payment import create_invoice, verify_payment_via_api
 from bot.storage import (
     get_all_stores,
-    get_unique_products_by_store,
-    get_available_items_by_name,
+    get_products_by_store,
     get_product_details_by_id,
     add_order,
     find_orders_by_user,
@@ -22,7 +21,9 @@ from bot.storage import (
     mark_product_as_sold,
     update_order,
     cancel_order_db,
-    get_products_by_store,
+    get_unique_products_by_store,
+    get_districts_for_product,
+    get_fresh_product_id,
 )
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="HTML", threaded=False)
@@ -82,7 +83,7 @@ def cmd_start(message):
     )
     bot.send_message(
         message.chat.id,
-        f"👋 Привет, {message.from_user.first_name}!\nДобро пожаловать в магазин!\n🎁 Выбирай быстрее. (Или я заберу это себе!)",
+        f"👋 Привет, {message.from_user.first_name}!\nДобро пожаловать в магазин!",
         reply_markup=main_menu(),
     )
 
@@ -103,6 +104,7 @@ def handle_buy(message):
     stores = get_all_stores()
     if not stores:
         return bot.send_message(message.chat.id, "❌ Витрина пуста.")
+
     kb = types.InlineKeyboardMarkup()
     for s in stores:
         kb.add(
@@ -110,6 +112,7 @@ def handle_buy(message):
                 s["title"], callback_data=f"store_{s['store_id']}_0"
             )
         )
+
     bot.send_message(message.chat.id, "📂 Выберите категорию:", reply_markup=kb)
 
 
@@ -124,7 +127,7 @@ def handle_store(call):
     store_id = parts[1]
     page = int(parts[2]) if len(parts) > 2 else 0
 
-    # ТУТ ИЗМЕНЕНИЕ: Берем только уникальные имена
+    # 1. Показываем УНИКАЛЬНЫЕ имена товаров
     products = get_unique_products_by_store(store_id)
     if not products:
         return bot.send_message(call.message.chat.id, "В этой категории пока пусто.")
@@ -136,7 +139,7 @@ def handle_store(call):
 
     kb = types.InlineKeyboardMarkup()
     for p in page_products:
-        # Передаем ref_id (ID любого товара с таким именем), чтобы потом найти все остальные
+        # Передаем ref_id (ID любого товара с таким именем) для перехода к выбору района
         kb.add(
             types.InlineKeyboardButton(
                 f"{p['name']} — {p['price_usd']}$", callback_data=f"pname_{p['ref_id']}"
@@ -180,69 +183,61 @@ def noop(c):
     bot.answer_callback_query(c.id)
 
 
-# --- ШАГ 2: ВЫБОР РАЙОНА (НОВОЕ) ---
+# --- ВЫБОР РАЙОНА (КАК НА СКРИНШОТЕ) ---
 @bot.callback_query_handler(func=lambda c: c.data.startswith("pname_"))
-def handle_item_group(call):
+def handle_district_selection(call):
     try:
         bot.answer_callback_query(call.id)
     except:
         pass
 
+    # Получаем детали товара, чтобы узнать имя
     ref_id = int(call.data.split("_")[1])
-    # Узнаем имя товара
     ref_details = get_product_details_by_id(ref_id)
+
     if not ref_details:
-        return bot.send_message(call.from_user.id, "Товар не найден.")
+        return bot.send_message(call.from_user.id, "Товар закончился.")
 
     name = ref_details["product_name"]
-
-    # Ищем все доступные районы для этого имени
-    items = get_available_items_by_name(name)
+    price = ref_details["price_usd"]
 
     # Группируем по районам
-    districts = {}  # "Center": [id1, id2]
-    for item in items:
-        addr = item["address"]
-        if addr not in districts:
-            districts[addr] = []
-        districts[addr].append(item)
+    districts = get_districts_for_product(name)
 
-    kb = types.InlineKeyboardMarkup()
-    for addr, items_list in districts.items():
-        # Берем первый свободный ID в этом районе
-        target_id = items_list[0]["product_id"]
-        count = len(items_list)
-        kb.add(
-            types.InlineKeyboardButton(
-                f"{addr} ({count} шт.)", callback_data=f"prod_{target_id}"
-            )
+    kb = types.InlineKeyboardMarkup(row_width=2)  # 2 кнопки в ряд
+    buttons = []
+    for d in districts:
+        # d = {'address': 'Космос', 'count': 5, 'target_id': 123}
+        # Кнопка: "Космос" (или "Космос (5 шт)")
+        btn_text = f"{d['address']}"
+        # В callback передаем target_id, который является "ключом" к покупке в этом районе
+        buttons.append(
+            types.InlineKeyboardButton(btn_text, callback_data=f"prod_{d['target_id']}")
         )
 
-    # Кнопка назад в категорию
-    kb.add(
-        types.InlineKeyboardButton(
-            "🔙 Назад к списку",
-            callback_data=f"store_{user_state.get(call.from_user.id, {}).get('store_id', '1')}_0",
-        )
-    )
+    kb.add(*buttons)
+
+    # Кнопка Назад
+    store_id = user_state.get(call.from_user.id, {}).get("store_id", "1")
+    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data=f"store_{store_id}_0"))
+
+    text = f"<b>{name}</b>\n\n" f"Цена: {price} $\n" f"Выберите подходящий район:"
 
     try:
         bot.edit_message_text(
-            f"📍 Выберите район для: <b>{name}</b>",
+            text,
             call.message.chat.id,
             call.message.message_id,
             reply_markup=kb,
             parse_mode="HTML",
         )
     except:
-        bot.send_message(
-            call.message.chat.id, f"📍 Выберите район для: {name}", reply_markup=kb
-        )
+        bot.send_message(call.message.chat.id, text, reply_markup=kb, parse_mode="HTML")
 
 
-# --- ШАГ 3: СОЗДАНИЕ ЗАКАЗА ---
+# --- СОЗДАНИЕ ЗАКАЗА ---
 @bot.callback_query_handler(func=lambda c: c.data.startswith("prod_"))
-def handle_prod_selection(call):
+def handle_prod_payment(call):
     try:
         bot.answer_callback_query(call.id)
     except:
@@ -250,7 +245,7 @@ def handle_prod_selection(call):
 
     uid = call.from_user.id
 
-    # Проверка лимита (умная)
+    # 1. Проверка лимита
     orders = find_orders_by_user(uid)
     unpaid = 0
     now = time.time()
@@ -259,7 +254,7 @@ def handle_prod_selection(call):
             d.get("status") == "waiting_payment"
             and d.get("delivery_status") != "delivered"
         ):
-            if (now - d.get("created_at_ts", 0)) < 7200:  # 2 часа
+            if (now - d.get("created_at_ts", 0)) < 7200:
                 unpaid += 1
 
     if unpaid >= MAX_UNPAID_ORDERS:
@@ -269,16 +264,27 @@ def handle_prod_selection(call):
             parse_mode="HTML",
         )
 
-    try:
-        pid = int(call.data.split("_")[1])
-        details = get_product_details_by_id(pid)
-    except:
-        details = None
+    # 2. Поиск свободного товара в этом районе
+    # Нам пришел ID одного из товаров (target_id). Узнаем его имя и район.
+    target_id = int(call.data.split("_")[1])
+    target_info = get_product_details_by_id(target_id)
 
-    if not details:
+    if not target_info:
+        return bot.send_message(uid, "❌ Ошибка: товар не найден.")
+
+    name = target_info["product_name"]
+    address = target_info["address"]
+
+    # 3. Ищем ЛЮБОЙ свободный ID с таким именем и районом
+    # (Это нужно на случай, если конкретно target_id уже кто-то купил, пока мы смотрели меню)
+    real_pid = get_fresh_product_id(name, address)
+
+    if not real_pid:
         return bot.send_message(
-            uid, "❌ Кто-то перехватил этот клад! Выберите другой район."
+            uid, f"❌ В районе {address} товар закончился. Выберите другой."
         )
+
+    details = get_product_details_by_id(real_pid)
 
     temp_oid = f"ORD-{int(time.time())}-{uid}"
     res = create_invoice(uid, details["price_usd"], temp_oid)
@@ -287,13 +293,7 @@ def handle_prod_selection(call):
 
     pay_url, track_id = res
     real_oid = add_order(
-        uid,
-        pid,
-        details["price_usd"],
-        details.get("address"),
-        temp_oid,
-        track_id,
-        pay_url,
+        uid, real_pid, details["price_usd"], address, temp_oid, track_id, pay_url
     )
 
     # --- ВАШИ СООБЩЕНИЯ ---
@@ -302,14 +302,14 @@ def handle_prod_selection(call):
     )
     bot.send_message(
         uid,
-        "ℹ️ Статус вашего заказа можно проверить в меню <b>📦 Мои заказы</b>.",
+        "ℹ️ Статус заказа можно проверить в меню <b>📦 Мои заказы</b>.",
         parse_mode="HTML",
     )
 
     text = (
         f"🧾 <b>Заказ №{real_oid}</b>\n\n"
         f"📦 Товар: <b>{details['product_name']}</b>\n"
-        f"📍 Район: <b>{details.get('address', 'Не указан')}</b>\n"
+        f"📍 Район: <b>{details['address']}</b>\n"
         f"💰 К оплате: <b>{details['price_usd']} $</b>\n\n"
         f"⚠️ <i>Фото и описание придут автоматически после оплаты.</i>"
     )
@@ -317,8 +317,8 @@ def handle_prod_selection(call):
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("💳 Оплатить", url=pay_url))
 
-    # Кнопка отмены возвращает к списку районов этого товара (чтобы выбрать другой)
-    kb.add(types.InlineKeyboardButton("🔙 Отмена", callback_data=f"pname_{pid}"))
+    # Кнопка отмены возвращает к списку районов (используем тот же ID, что был при входе)
+    kb.add(types.InlineKeyboardButton("🔙 Отмена", callback_data=f"pname_{target_id}"))
 
     try:
         bot.edit_message_text(
@@ -530,7 +530,7 @@ def give_start(m):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("give_s_"))
 def give_list(c):
     sid = c.data.split("_")[2]
-    # Используем get_products_by_store (здесь можно показывать все)
+    # Админу показываем полный список без группировки, чтобы выдать конкретный клад
     prods = get_products_by_store(sid)
     kb = types.InlineKeyboardMarkup()
     for p in prods:
@@ -597,7 +597,6 @@ def adm_del(m):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("adel_s_"))
 def adm_del_list(c):
     sid = c.data.split("_")[2]
-    # Используем get_products_by_store чтобы видеть конкретные ID для удаления
     prods = get_products_by_store(sid)
     kb = types.InlineKeyboardMarkup()
     for p in prods:
@@ -659,7 +658,6 @@ def edit_start(m):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("edit_s_"))
 def edit_list_prods(c):
     sid = c.data.split("_")[2]
-    # Используем get_products_by_store
     prods = get_products_by_store(sid)
     kb = types.InlineKeyboardMarkup()
     for p in prods:
