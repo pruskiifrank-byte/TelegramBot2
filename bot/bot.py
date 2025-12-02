@@ -34,7 +34,7 @@ flood_control = {}
 
 PRODUCTS_PER_PAGE = 5
 FLOOD_LIMIT = 0.5
-MAX_UNPAID_ORDERS = 5
+MAX_UNPAID_ORDERS = 1
 
 
 def send_product_visuals(chat_id, file_path_str, caption):
