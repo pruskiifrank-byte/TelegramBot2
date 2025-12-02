@@ -246,3 +246,25 @@ def find_orders_by_user(user_id):
                 "created_at_ts": created_at.timestamp() if created_at else 0,
             }
     return orders_dict
+
+
+def get_table_data(table_name):
+    """
+    Возвращает заголовки и все строки таблицы для экспорта.
+    """
+    # Список разрешенных таблиц (защита от SQL-инъекций)
+    allowed_tables = ["users", "products", "orders", "stores"]
+
+    if table_name not in allowed_tables:
+        return [], []
+
+    # 1. Получаем названия колонок
+    query_cols = f"SELECT column_name FROM information_schema.columns WHERE table_name = '{table_name}';"
+    cols_res = execute_query(query_cols, fetch=True)
+    headers = [row[0] for row in cols_res] if cols_res else []
+
+    # 2. Получаем данные
+    query_data = f"SELECT * FROM {table_name};"
+    rows = execute_query(query_data, fetch=True)
+
+    return headers, rows

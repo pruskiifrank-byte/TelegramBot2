@@ -4,7 +4,11 @@ from telebot import types
 from telebot.types import InputMediaPhoto
 import time
 import math
-from bot.config import TELEGRAM_TOKEN, ADMIN_IDS
+import csv
+import io
+import zipfile
+from datetime import datetime
+from bot.config import TELEGRAM_TOKEN, ADMIN_IDS, SUPPORT_LINK, REVIEWS_LINK, NEWS_LINK
 from bot.payment import create_invoice, verify_payment_via_api
 from bot.storage import (
     get_all_stores,
@@ -24,6 +28,7 @@ from bot.storage import (
     get_unique_products_by_store,
     get_districts_for_product,
     get_fresh_product_id,
+    get_table_data,
 )
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="HTML", threaded=False)
@@ -70,8 +75,23 @@ def anti_flood(func):
 
 # --- МЕНЮ ---
 def main_menu():
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add("🛒 Купить", "📦 Мои заказы")
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+
+    # Кнопка "Купить" на всю ширину
+    btn_buy = types.KeyboardButton("🛒 Купить 🌿")
+
+    # Кнопки во второй ряд
+    btn_orders = types.KeyboardButton("📦 Мои заказы")
+    btn_support = types.KeyboardButton("🆘 Поддержка")
+
+    # Кнопки в третий ряд
+    btn_reviews = types.KeyboardButton("⭐️ Отзывы")
+    btn_rules = types.KeyboardButton("📜 Правила")
+
+    kb.add(btn_buy)
+    kb.row(btn_orders, btn_support)
+    kb.row(btn_reviews, btn_rules)
+
     return kb
 
 
@@ -81,10 +101,15 @@ def cmd_start(message):
     upsert_user(
         message.chat.id, message.from_user.username, message.from_user.first_name
     )
+
+    welcome_text = (
+        f"👋 <b>Привет, {message.from_user.first_name}!</b>\n\n"
+        f"Добро пожаловать в лучший шоп города! 🏙\n"
+        f"Выбирай товар в меню ниже 👇"
+    )
+
     bot.send_message(
-        message.chat.id,
-        f"👋 Привет, {message.from_user.first_name}!\nДобро пожаловать в магазин!",
-        reply_markup=main_menu(),
+        message.chat.id, welcome_text, reply_markup=main_menu(), parse_mode="HTML"
     )
 
 
@@ -98,7 +123,7 @@ def back_to_main(call):
 
 
 # --- ПОКУПКА ---
-@bot.message_handler(func=lambda m: m.text == "🛒 Купить")
+@bot.message_handler(func=lambda m: m.text == "🛒 Купить 🌿")
 @anti_flood
 def handle_buy(message):
     stores = get_all_stores()
@@ -171,6 +196,54 @@ def handle_store(call):
         )
     except:
         bot.send_message(call.message.chat.id, "📦 Выберите товар:", reply_markup=kb)
+
+
+@bot.message_handler(
+    func=lambda m: m.text == "🛒 Купить 🌿"
+)  # Обратите внимание на смайлик
+@anti_flood
+def handle_buy_btn(message):
+    # Вызываем вашу старую функцию покупки
+    handle_buy(message)
+
+
+@bot.message_handler(func=lambda m: m.text == "🆘 Поддержка")
+@anti_flood
+def handle_support(message):
+    text = (
+        f"👨‍💻 <b>Возникли вопросы?</b>\n"
+        f"Проблема с оплатой или ненаход?\n\n"
+        f"✍️ Пиши оператору: {SUPPORT_LINK}\n"
+        f"<i>(Работаем с 10:00 до 22:00)</i>"
+    )
+    # Инлайн кнопка для удобства
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("Написать оператору ✈️", url=SUPPORT_LINK))
+
+    bot.send_message(message.chat.id, text, reply_markup=kb, parse_mode="HTML")
+
+
+@bot.message_handler(func=lambda m: m.text == "⭐️ Отзывы")
+@anti_flood
+def handle_reviews(message):
+    text = f"💬 Читайте отзывы наших довольных клиентов тут:\n{REVIEWS_LINK}"
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("Перейти к отзывам ⭐️", url=REVIEWS_LINK))
+    bot.send_message(message.chat.id, text, reply_markup=kb)
+
+
+@bot.message_handler(func=lambda m: m.text == "📜 Правила")
+@anti_flood
+def handle_rules(message):
+    text = (
+        "📜 <b>ПРАВИЛА МАГАЗИНА</b>\n\n"
+        "1. .\n"
+        "2. .\n"
+        "3. Спам оператору = бан.\n"
+        "4. Оплата только через бота.\n\n"
+        "<i>Покупая у нас, вы соглашаетесь с этими правилами.</i>"
+    )
+    bot.send_message(message.chat.id, text, parse_mode="HTML")
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "cmd_buy_callback")
@@ -412,13 +485,15 @@ def check_pay(call):
 
 # --- АДМИНКА ---
 @bot.message_handler(commands=["admin"])
+@bot.message_handler(commands=["admin"])
 def admin_panel(message):
     if message.from_user.id not in ADMIN_IDS:
         return
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("➕ Добавить товар", "✏️ Изменить товар")
     kb.add("❌ Удалить товар", "🎁 Выдать товар")
-    kb.add("📢 Рассылка", "🔙 Меню")
+    kb.add("📢 Рассылка", "💾 Бэкап БД")  # <--- НОВАЯ КНОПКА
+    kb.add("🔙 Меню")
     bot.send_message(message.chat.id, "Админка:", reply_markup=kb)
 
 
@@ -704,3 +779,54 @@ def edit_save(m):
             return bot.send_message(m.chat.id, "Ошибка.")
     update_product_field(d["edit_pid"], d["edit_field"], val)
     bot.send_message(m.chat.id, "Обновлено!")
+
+
+# --- БЭКАП (ЭКСПОРТ ДАННЫХ) ---
+
+
+@bot.message_handler(func=lambda m: m.text == "💾 Бэкап БД")
+def admin_backup(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    msg = bot.send_message(message.chat.id, "⏳ Собираю данные и архивирую...")
+
+    # Таблицы, которые хотим скачать
+    tables = ["users", "orders", "products", "stores"]
+
+    # Создаем буфер в памяти для ZIP-архива
+    zip_buffer = io.BytesIO()
+
+    try:
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for table in tables:
+                headers, rows = get_table_data(table)
+
+                if not headers:
+                    continue
+
+                # Создаем CSV файл в памяти
+                csv_buffer = io.StringIO()
+                writer = csv.writer(csv_buffer)
+                writer.writerow(headers)  # Заголовки
+                writer.writerows(rows)  # Данные
+
+                # Добавляем CSV в ZIP
+                zip_file.writestr(f"{table}.csv", csv_buffer.getvalue())
+
+        # Готовим файл к отправке
+        zip_buffer.seek(0)
+        date_str = datetime.now().strftime("%Y-%m-%d_%H-%M")
+        filename = f"backup_{date_str}.zip"
+
+        bot.send_document(
+            message.chat.id,
+            zip_buffer,
+            caption=f"✅ **Полный бэкап базы данных**\n📅 Дата: {date_str}",
+            visible_file_name=filename,
+            parse_mode="Markdown",
+        )
+        bot.delete_message(message.chat.id, msg.message_id)
+
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ Ошибка бэкапа: {e}")
