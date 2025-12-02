@@ -29,22 +29,45 @@ def get_all_stores():
     return stores_list
 
 
-def get_products_by_store(store_id):
-    # Показываем только НЕ проданные
+def get_unique_products_by_store(store_id):
+    """
+    Возвращает список УНИКАЛЬНЫХ названий товаров в магазине.
+    Используем DISTINCT ON (name), чтобы не дублировать кнопки.
+    """
     query = """
-    SELECT product_id, name, price_usd 
+    SELECT DISTINCT ON (name) product_id, name, price_usd 
     FROM products 
     WHERE store_id = %s AND is_sold = FALSE 
-    ORDER BY price_usd;
+    ORDER BY name, product_id;
     """
     results = execute_query(query, (store_id,), fetch=True)
     products_list = []
     if results:
         for row in results:
+            # Мы берем ID первого попавшегося товара просто как "ссылку" на группу
             products_list.append(
-                {"product_id": row[0], "name": row[1], "price_usd": float(row[2])}
+                {"ref_id": row[0], "name": row[1], "price_usd": float(row[2])}
             )
     return products_list
+
+
+def get_available_items_by_name(name):
+    """
+    Ищет все доступные товары с таким названием (чтобы показать районы).
+    """
+    query = """
+    SELECT product_id, address, price_usd 
+    FROM products 
+    WHERE name = %s AND is_sold = FALSE;
+    """
+    results = execute_query(query, (name,), fetch=True)
+    items = []
+    if results:
+        for row in results:
+            items.append(
+                {"product_id": row[0], "address": row[1], "price": float(row[2])}
+            )
+    return items
 
 
 def get_product_details_by_id(product_id):
@@ -63,9 +86,15 @@ def get_product_details_by_id(product_id):
             "delivery_text": row[2],
             "product_name": row[3],
             "shop_title": row[4],
-            "address": row[5] if len(row) > 5 else "Не указан",  # <--- Достаем район
+            "address": row[5] if len(row) > 5 else "Не указан",
         }
     return None
+
+
+def mark_product_as_sold(product_id):
+    query = "UPDATE products SET is_sold = TRUE WHERE product_id = %s;"
+    execute_query(query, (product_id,))
+
 
 # --- АДМИНКА ---
 def insert_product(store_id, name, price, delivery_text, file_path, address):
@@ -74,14 +103,6 @@ def insert_product(store_id, name, price, delivery_text, file_path, address):
     VALUES (%s, %s, %s, %s, %s, %s, FALSE);
     """
     execute_query(query, (store_id, name, price, delivery_text, file_path, address))
-
-
-def mark_product_as_sold(product_id):
-    query = "UPDATE products SET is_sold = TRUE WHERE product_id = %s;"
-    execute_query(query, (product_id,))
-
-
-
 
 
 def update_product_field(product_id, field, value):
@@ -150,8 +171,6 @@ def get_order(order_id):
     query = "SELECT * FROM orders WHERE order_id = %s;"
     result = execute_query(query, (order_id,), fetch=True)
     if result:
-        # Индексы зависят от порядка создания таблицы.
-        # Обычно: 0-order_id, 1-user, 2-prod, 3-addr, 4-price, 5-status, 6-deliv, 7-track
         return {
             "order_id": result[0][0],
             "user_id": result[0][1],
@@ -175,19 +194,15 @@ def find_orders_by_user(user_id):
     orders_dict = {}
     if results:
         for row in results:
-            # Теперь распаковываем 7 значений (добавилось created_at)
             oid, status, price, p_name, d_status, pay_url, created_at = row
-
             if not p_name:
                 p_name = "Удаленный товар"
-
             orders_dict[oid] = {
                 "status": status,
                 "price": float(price),
                 "product_name": p_name,
                 "delivery_status": d_status,
                 "payment_url": pay_url,
-                # Превращаем время в число (timestamp), чтобы удобно сравнивать
                 "created_at_ts": created_at.timestamp() if created_at else 0,
             }
     return orders_dict
