@@ -30,21 +30,73 @@ def get_all_stores():
 
 
 def get_products_by_store(store_id):
-    """Возвращает все непроданные товары (для админки)."""
+    """
+    Возвращает товары для Админки.
+    Добавили admin_note, чтобы выводить его на кнопках.
+    """
     query = """
-    SELECT product_id, name, price_usd 
+    SELECT product_id, name, price_usd, admin_note 
     FROM products 
     WHERE store_id = %s AND is_sold = FALSE 
-    ORDER BY price_usd;
+    ORDER BY product_id DESC;
     """
     results = execute_query(query, (store_id,), fetch=True)
     products_list = []
     if results:
         for row in results:
             products_list.append(
-                {"product_id": row[0], "name": row[1], "price_usd": float(row[2])}
+                {
+                    "product_id": row[0],
+                    "name": row[1],
+                    "price_usd": float(row[2]),
+                    "admin_note": (
+                        row[3] if row[3] else ""
+                    ),  # Если заметки нет, будет пустая строка
+                }
             )
     return products_list
+
+
+def get_product_details_by_id(product_id):
+    query = """
+    SELECT p.price_usd, p.file_path, p.delivery_text, p.name, s.title, p.address, p.admin_note
+    FROM products p 
+    JOIN stores s ON p.store_id = s.store_id 
+    WHERE p.product_id = %s;
+    """
+    result = execute_query(query, (product_id,), fetch=True)
+    if result:
+        row = result[0]
+        # Проверяем длину row, чтобы не было ошибки, если база старая
+        admin_note = row[6] if len(row) > 6 and row[6] else "Нет заметки"
+
+        return {
+            "price_usd": float(row[0]),
+            "file_path": row[1],
+            "delivery_text": row[2],
+            "product_name": row[3],
+            "shop_title": row[4],
+            "address": row[5] if len(row) > 5 else "Не указан",
+            "admin_note": admin_note,
+        }
+    return None
+
+
+def update_product_field(product_id, field, value):
+    # Добавили 'admin_note' в разрешенные поля
+    allowed_fields = [
+        "name",
+        "price_usd",
+        "delivery_text",
+        "file_path",
+        "address",
+        "admin_note",
+    ]
+    if field not in allowed_fields:
+        return
+
+    query = f"UPDATE products SET {field} = %s WHERE product_id = %s;"
+    execute_query(query, (value, product_id))
 
 
 def get_unique_products_by_store(store_id):

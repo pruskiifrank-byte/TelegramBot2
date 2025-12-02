@@ -78,14 +78,14 @@ def main_menu():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
 
     # Кнопка "Купить" на всю ширину
-    btn_buy = types.KeyboardButton("🛒 Купить 🌿")
+    btn_buy = types.KeyboardButton("🎒 Забрать подарки")
 
     # Кнопки во второй ряд
-    btn_orders = types.KeyboardButton("📦 Мои заказы")
+    btn_orders = types.KeyboardButton("📦 Мои подарки")
     btn_support = types.KeyboardButton("🆘 Поддержка")
 
     # Кнопки в третий ряд
-    btn_reviews = types.KeyboardButton("⭐️ Отзывы")
+    btn_reviews = types.KeyboardButton("⭐️ Слухи")
     btn_rules = types.KeyboardButton("📜 Правила")
 
     kb.add(btn_buy)
@@ -103,9 +103,8 @@ def cmd_start(message):
     )
 
     welcome_text = (
-        f"👋 <b>Привет, {message.from_user.first_name}!</b>\n\n"
-        f"Добро пожаловать в лучший шоп города! 🏙\n"
-        f"Выбирай товар в меню ниже 👇"
+        f"Ты снова здесь? (Ворчит) Ну, привет, {message.from_user.first_name}"
+        "Это магазин Гринча. И да, я слежу за тобой.\n",
     )
 
     bot.send_message(
@@ -123,9 +122,13 @@ def back_to_main(call):
 
 
 # --- ПОКУПКА ---
-@bot.message_handler(func=lambda m: m.text == "🛒 Купить 🌿")
+@bot.message_handler(func=lambda m: m.text == "🎒 Забрать подарки")
 @anti_flood
 def handle_buy(message):
+    bot.send.message(
+        message.chat.id,
+        "Эти товары почти так же хороши, как украденные подарки.\n Хватай, пока не передумал!",
+    )
     stores = get_all_stores()
     if not stores:
         return bot.send_message(message.chat.id, "❌ Витрина пуста.")
@@ -185,7 +188,7 @@ def handle_store(call):
         )
 
     kb.row(*nav)
-    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="cmd_buy_callback"))
+    kb.add(types.InlineKeyboardButton("🔙 Сбежать", callback_data="cmd_buy_callback"))
 
     try:
         bot.edit_message_text(
@@ -195,11 +198,11 @@ def handle_store(call):
             reply_markup=kb,
         )
     except:
-        bot.send_message(call.message.chat.id, "📦 Выберите товар:", reply_markup=kb)
+        bot.send_message(call.message.chat.id, "📦 Выберите подарок:", reply_markup=kb)
 
 
 @bot.message_handler(
-    func=lambda m: m.text == "🛒 Купить 🌿"
+    func=lambda m: m.text == "🎒 Забрать подарки"
 )  # Обратите внимание на смайлик
 @anti_flood
 def handle_buy_btn(message):
@@ -207,14 +210,15 @@ def handle_buy_btn(message):
     handle_buy(message)
 
 
-@bot.message_handler(func=lambda m: m.text == "🆘 Поддержка")
+@bot.message_handler(func=lambda m: m.text == "🤮 Поныть Гринчу")
 @anti_flood
 def handle_support(message):
     text = (
         f"👨‍💻 <b>Возникли вопросы?</b>\n"
         f"Проблема с оплатой или ненаход?\n\n"
+        f"ЭТО ТВОИ ПРОБЛЕМЫ , Шучу\n"
         f"✍️ Пиши оператору: {SUPPORT_LINK}\n"
-        f"<i>(Работаем с 10:00 до 22:00)</i>"
+        f"<i>(Работаем с 10:00 до 22:00)(Возможно 😈)</i>"
     )
     # Инлайн кнопка для удобства
     kb = types.InlineKeyboardMarkup()
@@ -223,12 +227,12 @@ def handle_support(message):
     bot.send_message(message.chat.id, text, reply_markup=kb, parse_mode="HTML")
 
 
-@bot.message_handler(func=lambda m: m.text == "⭐️ Отзывы")
+@bot.message_handler(func=lambda m: m.text == "⭐️ Слухи")
 @anti_flood
 def handle_reviews(message):
-    text = f"💬 Читайте отзывы наших довольных клиентов тут:\n{REVIEWS_LINK}"
+    text = f"💬 Читайте слухи наших довольных клиентов тут:\n{REVIEWS_LINK}"
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("Перейти к отзывам ⭐️", url=REVIEWS_LINK))
+    kb.add(types.InlineKeyboardButton("Перейти к слухам ⭐️", url=REVIEWS_LINK))
     bot.send_message(message.chat.id, text, reply_markup=kb)
 
 
@@ -237,8 +241,8 @@ def handle_reviews(message):
 def handle_rules(message):
     text = (
         "📜 <b>ПРАВИЛА МАГАЗИНА</b>\n\n"
-        "1. .\n"
-        "2. .\n"
+        "1. Видео подхода к месту .\n"
+        "2. Иметь 5 покупок .\n"
         "3. Спам оператору = бан.\n"
         "4. Оплата только через бота.\n\n"
         "<i>Покупая у нас, вы соглашаетесь с этими правилами.</i>"
@@ -269,7 +273,7 @@ def handle_district_selection(call):
     ref_details = get_product_details_by_id(ref_id)
 
     if not ref_details:
-        return bot.send_message(call.from_user.id, "Товар закончился.")
+        return bot.send_message(call.from_user.id, "🤢 Витрина пуста. Я всё украл!")
 
     name = ref_details["product_name"]
     price = ref_details["price_usd"]
@@ -292,7 +296,9 @@ def handle_district_selection(call):
 
     # Кнопка Назад
     store_id = user_state.get(call.from_user.id, {}).get("store_id", "1")
-    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data=f"store_{store_id}_0"))
+    kb.add(
+        types.InlineKeyboardButton("🔙 Сбежать", callback_data=f"store_{store_id}_0")
+    )
 
     text = f"<b>{name}</b>\n\n" f"Цена: {price} $\n" f"Выберите подходящий район:"
 
@@ -333,7 +339,8 @@ def handle_prod_payment(call):
     if unpaid >= MAX_UNPAID_ORDERS:
         return bot.send_message(
             uid,
-            f"🚫 <b>Лимит заказов превышен!</b>\nОтмените старые заказы.",
+            f"❌ ЛИМИТ. У тебя уже 1 неоплаченных бесполезных покупок. \n "
+            "Сначала плати, потом заходи опять!",
             parse_mode="HTML",
         )
 
@@ -354,7 +361,7 @@ def handle_prod_payment(call):
 
     if not real_pid:
         return bot.send_message(
-            uid, f"❌ В районе {address} товар закончился. Выберите другой."
+            uid, f"❌ В этом районе {address} товар украден. Выберите другой."
         )
 
     details = get_product_details_by_id(real_pid)
@@ -363,6 +370,14 @@ def handle_prod_payment(call):
     res = create_invoice(uid, details["price_usd"], temp_oid)
     if not res:
         return bot.send_message(uid, "❌ Ошибка создания ссылки.")
+    # Шутки гринча
+    msg = bot.send_message(uid, "😈 Гринч спускается в дымоход...")
+    time.sleep(1)  # Ждем 1 секунду
+
+    bot.edit_message_text("🎒 Упаковываем добычу...", uid, msg.message_id)
+    time.sleep(1)
+
+    bot.delete_message(uid, msg.message_id)
 
     pay_url, track_id = res
     real_oid = add_order(
@@ -371,11 +386,14 @@ def handle_prod_payment(call):
 
     # --- ВАШИ СООБЩЕНИЯ ---
     bot.send_message(
-        uid, "✅ <b>Заказ создан! Адрес забронирован!</b>", parse_mode="HTML"
+        uid,
+        "✅ <b>Заказ создан! ⏰ БРОНЬ 1 ЧАС! Если ты не оплатишь это за 60 минут, "
+        "я ЛИЧНО сожгу твой подарок и продам его снова. Тик-так.</b>",
+        parse_mode="HTML",
     )
     bot.send_message(
         uid,
-        "ℹ️ Статус заказа можно проверить в меню <b>📦 Мои заказы</b>.",
+        "ℹ️ Статус своего жалкого заказика глянь в <b>📦 Мои заказы</b>.",
         parse_mode="HTML",
     )
 
@@ -384,7 +402,7 @@ def handle_prod_payment(call):
         f"📦 Товар: <b>{details['product_name']}</b>\n"
         f"📍 Район: <b>{details['address']}</b>\n"
         f"💰 К оплате: <b>{details['price_usd']} $</b>\n\n"
-        f"⚠️ <i>Фото и описание придут автоматически после оплаты.</i>"
+        f"⚠️ <i>Фото и описание свалятся тебе автоматически после оплаты… если уж так надо.</i>"
     )
 
     kb = types.InlineKeyboardMarkup()
@@ -406,14 +424,14 @@ def handle_prod_payment(call):
 
 
 # --- МОИ ЗАКАЗЫ ---
-@bot.message_handler(func=lambda m: m.text == "📦 Мои заказы")
+@bot.message_handler(func=lambda m: m.text == "📦 Мои подарки")
 @anti_flood
 def my_orders(message):
     orders = find_orders_by_user(message.chat.id)
     if not orders:
-        return bot.send_message(message.chat.id, "📭 История пуста.")
+        return bot.send_message(message.chat.id, "📭 История пуста… как твои ожидания.")
 
-    text = "📦 <b>ВАШИ ПОСЛЕДНИЕ ЗАКАЗЫ:</b>\n\n"
+    text = "📦 <b>ВАШИ ПОСЛЕДНИЕ ПОДАРКИ:</b>\n\n"
     for i, (oid, data) in enumerate(orders.items()):
         if i >= 5:
             break
@@ -422,22 +440,22 @@ def my_orders(message):
 
         icon = "❓"
         if data["delivery_status"] == "delivered":
-            icon = "🎁 ВЫДАН"
+            icon = "🎁 Хватай, раз уж выдали"
         elif status == "paid":
-            icon = "✅ ОПЛАЧЕН"
+            icon = "✅ Ну ладно, оплачено"
         elif status == "cancelled":
-            icon = "🗑 ОТМЕНЕН"
+            icon = "🗑 Сам же и отменил, молодец"
         elif status == "waiting_payment":
-            icon = "⏳ ОЖИДАЕТ ОПЛАТЫ"
+            icon = "⏳ Ждёт твоей щедрости"
             kb.add(
                 types.InlineKeyboardButton(
-                    "🔄 Проверить", callback_data=f"check_{oid}"
+                    "🔄 Ну проверь...", callback_data=f"check_{oid}"
                 ),
                 types.InlineKeyboardButton(
-                    "❌ Отменить", callback_data=f"cancel_{oid}"
+                    "❌ Отменить(Фу таким быть)", callback_data=f"cancel_{oid}"
                 ),
             )
-            kb.add(types.InlineKeyboardButton("💳 Оплатить", url=data["payment_url"]))
+            kb.add(types.InlineKeyboardButton("💳 Заплати уж", url=data["payment_url"]))
 
         text += f"🛒 <b>{data['product_name']}</b>\n🆔 <code>{oid}</code> | {data['price']}$\nСтатус: {icon}\n➖➖➖➖➖➖\n"
 
@@ -452,7 +470,7 @@ def my_orders(message):
 def cancel_order_handler(call):
     oid = call.data.split("_")[1]
     cancel_order_db(oid)
-    bot.answer_callback_query(call.id, "Заказ отменен.")
+    bot.answer_callback_query(call.id, "Заказ отменен , Блеее🤮 Блееергх!.")
     bot.delete_message(call.message.chat.id, call.message.message_id)
     bot.send_message(call.message.chat.id, f"🗑 Заказ {oid} отменен.")
 
@@ -462,25 +480,27 @@ def check_pay(call):
     oid = call.data.split("_")[1]
     order = get_order(oid)
     if not order:
-        return bot.answer_callback_query(call.id, "Не найден.")
+        return bot.answer_callback_query(call.id, "Не найден… как и твоя удача.")
     if order["status"] == "paid":
-        return bot.answer_callback_query(call.id, "Уже оплачен!")
+        return bot.answer_callback_query(call.id, "Уже оплачен, не жми зря.")
 
     bot.answer_callback_query(call.id, "Проверяю...")
     if verify_payment_via_api(order.get("oxapay_track_id")):
         details = get_product_details_by_id(order["product_id"])
-        msg = f"✅ <b>Оплата прошла!</b>\n📦 {details['product_name']}\n📍 {details['delivery_text']}\n\nСпасибо за покупку!"
+        msg = f"✅ <b>Оплата прошла, ну хоть что-то </b>\n📦 {details['product_name']}\n📍 {details['delivery_text']}\n\n Пользуйся, раз уж купил."
         try:
             send_product_visuals(call.from_user.id, details["file_path"], msg)
             update_order(oid, status="paid", delivery_status="delivered")
             mark_product_as_sold(order["product_id"])
             bot.edit_message_text(
-                f"✅ Заказ {oid} выдан!", call.message.chat.id, call.message.message_id
+                f"✅ Заказ {oid} выдан. Хватай, пока не передумал.",
+                call.message.chat.id,
+                call.message.message_id,
             )
         except Exception as e:
-            bot.send_message(call.from_user.id, f"Ошибка выдачи: {e}")
+            bot.send_message(call.from_user.id, f"🤮 Что-то пошло не так: {e}")
     else:
-        bot.send_message(call.from_user.id, "❌ Оплата пока не найдена.")
+        bot.send_message(call.from_user.id, "❌ Оплаты нет. И Гринчу это не нравится.")
 
 
 # --- АДМИНКА ---
@@ -715,6 +735,9 @@ def do_broadcast(m):
 
 
 # --- РЕДАКТИРОВАНИЕ (EDIT) ---
+# --- РЕДАКТИРОВАНИЕ (EDIT) ---
+
+
 @bot.message_handler(func=lambda m: m.text == "✏️ Изменить товар")
 def edit_start(m):
     if m.from_user.id not in ADMIN_IDS:
@@ -734,15 +757,24 @@ def edit_start(m):
 def edit_list_prods(c):
     sid = c.data.split("_")[2]
     prods = get_products_by_store(sid)
+
     kb = types.InlineKeyboardMarkup()
     for p in prods:
+        # Добавляем заметку в текст кнопки
+        note_text = f" | 📝 {p['admin_note']}" if p["admin_note"] else ""
+        btn_text = f"{p['name']} ({p['price_usd']}$){note_text}"
+
         kb.add(
             types.InlineKeyboardButton(
-                p["name"], callback_data=f"edit_p_{p['product_id']}"
+                btn_text, callback_data=f"edit_p_{p['product_id']}"
             )
         )
+
     bot.edit_message_text(
-        "Товар?", c.message.chat.id, c.message.message_id, reply_markup=kb
+        "Выберите товар для правки (в скобках ваши заметки):",
+        c.message.chat.id,
+        c.message.message_id,
+        reply_markup=kb,
     )
 
 
@@ -750,14 +782,45 @@ def edit_list_prods(c):
 def edit_field(c):
     pid = c.data.split("_")[2]
     admin_state[c.from_user.id] = {"edit_pid": pid}
+
+    # Показываем текущую инфу админу, чтобы он понял, что это за товар
+    details = get_product_details_by_id(pid)
+    info = (
+        f"📦 <b>{details['product_name']}</b>\n"
+        f"📝 Заметка: <i>{details['admin_note']}</i>\n"
+        f"📍 Адрес: {details['address']}\n"
+        f"🔐 Клад: {details['delivery_text']}\n"
+    )
+
     kb = types.InlineKeyboardMarkup()
     kb.add(
         types.InlineKeyboardButton("Название", callback_data="edf_name"),
         types.InlineKeyboardButton("Цена", callback_data="edf_price_usd"),
-        types.InlineKeyboardButton("Адрес", callback_data="edf_address"),
     )
+    kb.add(
+        types.InlineKeyboardButton("Адрес (Район)", callback_data="edf_address"),
+        types.InlineKeyboardButton("Фото", callback_data="edf_file_path"),
+    )
+    # НОВАЯ КНОПКА
+    kb.add(
+        types.InlineKeyboardButton(
+            "📒 Изменить ЗАМЕТКУ", callback_data="edf_admin_note"
+        )
+    )
+
+    # Кнопка удаления сразу отсюда
+    kb.add(
+        types.InlineKeyboardButton(
+            "🗑 УДАЛИТЬ ЭТОТ ТОВАР", callback_data=f"adel_do_{pid}"
+        )
+    )
+
     bot.edit_message_text(
-        "Что меняем?", c.message.chat.id, c.message.message_id, reply_markup=kb
+        f"{info}\nЧто меняем?",
+        c.message.chat.id,
+        c.message.message_id,
+        reply_markup=kb,
+        parse_mode="HTML",
     )
 
 
@@ -765,20 +828,27 @@ def edit_field(c):
 def edit_val(c):
     field = c.data.replace("edf_", "")
     admin_state[c.from_user.id]["edit_field"] = field
-    msg = bot.send_message(c.message.chat.id, "Новое значение:")
+
+    text = "Введите новое значение:"
+    if field == "admin_note":
+        text = "✍️ Введите короткую заметку для себя (например: 'Клад у синего гаража'):"
+
+    msg = bot.send_message(c.message.chat.id, text)
     bot.register_next_step_handler(msg, edit_save)
 
 
 def edit_save(m):
     d = admin_state[m.from_user.id]
     val = m.text
+
     if d["edit_field"] == "price_usd":
         try:
             val = float(val)
         except:
-            return bot.send_message(m.chat.id, "Ошибка.")
+            return bot.send_message(m.chat.id, "Ошибка. Нужно число.")
+
     update_product_field(d["edit_pid"], d["edit_field"], val)
-    bot.send_message(m.chat.id, "Обновлено!")
+    bot.send_message(m.chat.id, "✅ Обновлено!")
 
 
 # --- БЭКАП (ЭКСПОРТ ДАННЫХ) ---
