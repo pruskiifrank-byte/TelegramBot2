@@ -232,7 +232,7 @@ def handle_prod_selection(call):
     text = (
         f"🧾 <b>Заказ №{real_oid}</b>\n\n"
         f"📦 Товар: <b>{details['product_name']}</b>\n"
-        f"📍 Район: <b>{details.get('address', 'Не указан')}</b>\n"
+        f"📍 Район: <b>{details.get('address', 'Не указан')}</b>\n"  # <--- ВСТАВИЛИ РАЙОН
         f"💰 К оплате: <b>{details['price_usd']} $</b>\n\n"
         f"⚠️ <i>Фото и описание придут автоматически после оплаты.</i>"
     )
@@ -386,15 +386,28 @@ def aadd_step2(m):
 def aadd_step3(m):
     try:
         admin_state[m.from_user.id]["price"] = float(m.text.replace(",", "."))
-        msg = bot.send_message(m.chat.id, "Район/Адрес (виден всем):")
+        # Спрашиваем район
+        msg = bot.send_message(
+            m.chat.id,
+            "3️⃣ Введите **Район/Метро** (Это будет видно клиенту до покупки):",
+            parse_mode="Markdown",
+        )
         bot.register_next_step_handler(msg, aadd_step4)
     except:
-        bot.send_message(m.chat.id, "Ошибка числа.")
+        bot.send_message(
+            m.chat.id, "❌ Ошибка! Цена должна быть числом (например 5.5)."
+        )
 
 
 def aadd_step4(m):
+    # Сохраняем район
     admin_state[m.from_user.id]["addr"] = m.text
-    msg = bot.send_message(m.chat.id, "Секретное описание/Клад:")
+
+    msg = bot.send_message(
+        m.chat.id,
+        "4️⃣ Введите **Секретное описание/Клад** (Только для покупателя):",
+        parse_mode="Markdown",
+    )
     bot.register_next_step_handler(msg, aadd_step5)
 
 

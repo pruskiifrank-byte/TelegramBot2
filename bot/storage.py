@@ -63,9 +63,17 @@ def get_product_details_by_id(product_id):
             "delivery_text": row[2],
             "product_name": row[3],
             "shop_title": row[4],
-            "address": row[5] if len(row) > 5 else "Не указан",
+            "address": row[5] if len(row) > 5 else "Не указан",  # <--- Достаем район
         }
     return None
+
+# --- АДМИНКА ---
+def insert_product(store_id, name, price, delivery_text, file_path, address):
+    query = """
+    INSERT INTO products (store_id, name, price_usd, delivery_text, file_path, address, is_sold)
+    VALUES (%s, %s, %s, %s, %s, %s, FALSE);
+    """
+    execute_query(query, (store_id, name, price, delivery_text, file_path, address))
 
 
 def mark_product_as_sold(product_id):
@@ -73,14 +81,7 @@ def mark_product_as_sold(product_id):
     execute_query(query, (product_id,))
 
 
-# --- АДМИНКА ---
-def insert_product(store_id, name, price, delivery_text, file_path, address):
-    """Добавляет товар (с адресом и списком фото)."""
-    query = """
-    INSERT INTO products (store_id, name, price_usd, delivery_text, file_path, address, is_sold)
-    VALUES (%s, %s, %s, %s, %s, %s, FALSE);
-    """
-    execute_query(query, (store_id, name, price, delivery_text, file_path, address))
+
 
 
 def update_product_field(product_id, field, value):

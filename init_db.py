@@ -92,6 +92,21 @@ def update_table_structure():
         pass
 
 
+def add_address_column():
+    print("🛠 Добавление колонки района...")
+    try:
+        # Добавляем колонку, если её нет
+        execute_query(
+            "ALTER TABLE products ADD COLUMN address TEXT DEFAULT 'Не указан';"
+        )
+        print("✅ Колонка 'address' успешно добавлена.")
+    except Exception as e:
+        print(f"ℹ️ Колонка уже есть или ошибка: {e}")
+
+
+if __name__ == "__main__":
+    add_address_column()
+
 if __name__ == "__main__":
     # ЗАПУСКАЕМ ВСЁ ПО ПОРЯДКУ
     create_tables()
