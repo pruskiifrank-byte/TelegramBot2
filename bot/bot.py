@@ -822,9 +822,11 @@ def admin_backup(message):
         bot.send_document(
             message.chat.id,
             zip_buffer,
-            caption=f"✅ **Полный бэкап базы данных**\n📅 Дата: {date_str}",
+            # 1. Меняем звездочки ** на тег <b>
+            caption=f"✅ <b>Полный бэкап базы данных</b>\n📅 Дата: {date_str}",
             visible_file_name=filename,
-            parse_mode="Markdown",
+            # 2. Меняем режим на HTML (он не ломается от символа '_')
+            parse_mode="HTML",
         )
         bot.delete_message(message.chat.id, msg.message_id)
 

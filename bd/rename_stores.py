@@ -31,10 +31,10 @@ if __name__ == "__main__":
     # --- НАСТРОЙКИ (МЕНЯТЬ ТУТ) ---
 
     # Пример: найти магазин где есть слово "Фрукты" и назвать его "Электроника"
-    rename_category("MrGrinchShopZp", "MrGrinchShopZp")
+    rename_category("", "MrGrinchShopZp")
 
     # Пример: найти магазин где есть слово "Овощи" и назвать его "Одежда"
-    rename_category("Магазин", "ScoobyDoo")
+    rename_category("", "ScoobyDoo")
 
     # Можете добавить свои строки:
     # rename_category("Старое название", "Новое название")
