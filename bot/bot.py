@@ -44,7 +44,12 @@ flood_control = {}
 PRODUCTS_PER_PAGE = 5
 FLOOD_LIMIT = 0.5
 MAX_UNPAID_ORDERS = 1
+
+# Тех-пауза
 MAINTENANCE_MODE = False
+
+# Ссыль на картинку с заказа
+ORDER_IMG = "AgACAgUAAxkBAAIR3GkwvRcNA3SAoqDSRicOyT0bFeAlAAJuC2sbRHuIVcqZZBo5CZGgAQADAgADeQADNgQ"
 
 GRINCH_JOKES = [
     "💚 «Не переживай, я почти добрый сегодня!»",
@@ -112,6 +117,12 @@ def cmd_start(message):
     welcome_text = (
         f"🎄 Привет,  {message.from_user.first_name}! 🎁"
         " Добро пожаловать к Гринчу!\n\n"
+        "Резервы в случае блокировки ⤵️⤵️⤵️\n"
+        "@scooby_doorezerv1 \n"
+        "@scooby_doorezerv2 \n"
+        "@scoobbyy_doo \n"
+        "@mrgrinchs \n"
+        "Это все актуальные линки \n\n" 
         f"<i>{joke}</i>"
     )
     bot.send_message(
@@ -323,7 +334,7 @@ def handle_prod_payment(call):
 
     uid = call.from_user.id
 
-    # Умный лимит (свежие долги < 2 часов)
+    # Умный лимит
     orders = find_orders_by_user(uid)
     unpaid = 0
     now = time.time()
@@ -338,7 +349,7 @@ def handle_prod_payment(call):
     if unpaid >= MAX_UNPAID_ORDERS:
         return bot.send_message(
             uid,
-            f"❌ ЛИМИТ. У тебя уже {unpaid} неоплаченных бесполезных покупок.\nСначала плати, потом заходи опять!",
+            f"❌ ЛИМИТ. У тебя уже {unpaid} неоплаченных покупок.\nСначала плати, потом заходи опять!",
             parse_mode="HTML",
         )
 
@@ -354,14 +365,13 @@ def handle_prod_payment(call):
     real_pid = get_fresh_product_id(target_info["product_name"], target_info["address"])
     if not real_pid:
         return bot.send_message(
-            uid,
-            f"❌ В этом районе {target_info['address']} товар украден. Выберите другой.",
+            uid, f"❌ В районе {target_info['address']} товар украден. Выберите другой."
         )
 
     details = get_product_details_by_id(real_pid)
     temp_oid = f"ORD-{int(time.time())}-{uid}"
 
-    # Гринч шутит
+    # Анимация
     msg = bot.send_message(uid, "😈 Гринч спускается в дымоход...")
     time.sleep(1)
     try:
@@ -405,8 +415,7 @@ def handle_prod_payment(call):
         f"📦 Товар: <b>{details['product_name']}</b>\n"
         f"📍 Район: <b>{details['address']}</b>\n"
         f"💰 К оплате: <b>{details['price_usd']} $</b>\n\n"
-        f" Оплатить на карту можно\n с помощью 👉 @braumilka\n\n"
-
+        f" Оплатить на карту можно\n с помощью 👉 <a href='https://t.me/braumilka'>@braumilka</a>\n\n"
         f"⚠️ <i>Фото и описание свалятся тебе автоматически после оплаты… если уж так надо.</i>"
     )
 
@@ -415,14 +424,14 @@ def handle_prod_payment(call):
     kb.add(types.InlineKeyboardButton("🔙 Отмена", callback_data=f"pname_{target_id}"))
 
     try:
-        bot.edit_message_text(
-            text,
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=kb,
-            parse_mode="HTML",
-        )
+        bot.delete_message(call.message.chat.id, call.message.message_id)
     except:
+        pass
+
+    try:
+        bot.send_photo(uid, ORDER_IMG, caption=text, reply_markup=kb, parse_mode="HTML")
+    except Exception as e:
+        # Если с фото проблема — шлем текст
         bot.send_message(uid, text, reply_markup=kb, parse_mode="HTML")
 
 
