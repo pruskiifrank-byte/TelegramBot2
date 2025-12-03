@@ -206,6 +206,11 @@ def update_product_field(product_id, field, value):
 
 
 def delete_product(product_id):
+
+    execute_query(
+        "UPDATE orders SET product_id = NULL WHERE product_id = %s;", (product_id,)
+    )
+
     execute_query("DELETE FROM products WHERE product_id = %s;", (product_id,))
 
 

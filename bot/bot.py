@@ -679,22 +679,51 @@ def adm_del(m):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("adel_s_"))
 def adm_del_list(c):
-    sid = c.data.split("_")[2]
-    prods = get_products_by_store(sid)
-    kb = types.InlineKeyboardMarkup()
-    for p in prods:
-        kb.add(
-            types.InlineKeyboardButton(
-                f"❌ {p['name']}", callback_data=f"adel_do_{p['product_id']}"
+    try:
+        sid = c.data.split("_")[2]
+        # Получаем список товаров
+        prods = get_products_by_store(sid)
+
+        # --- ПРОВЕРКА: ЕСТЬ ЛИ ТОВАРЫ? ---
+        if not prods:
+            return bot.answer_callback_query(
+                c.id,
+                "❌ В этой категории пусто (или все товары проданы)!",
+                show_alert=True,
             )
+        # ---------------------------------
+
+        kb = types.InlineKeyboardMarkup()
+        for p in prods:
+            note = p.get("admin_note", "")
+            note_str = f" | {note}" if note else ""
+            # Добавляем кнопку для каждого товара
+            kb.add(
+                types.InlineKeyboardButton(
+                    f"❌ {p['name']}{note_str} ({p['price_usd']}$)",
+                    callback_data=f"adel_do_{p['product_id']}",
+                )
+            )
+
+        # Кнопка назад к категориям удаления
+        kb.add(
+            types.InlineKeyboardButton("🔙 Назад", callback_data="adel_back_to_cats")
         )
-    bot.edit_message_text(
-        "Жми для удаления:", c.message.chat.id, c.message.message_id, reply_markup=kb
-    )
+
+        bot.edit_message_text(
+            "Выберите товар для удаления:",
+            c.message.chat.id,
+            c.message.message_id,
+            reply_markup=kb,
+        )
+
+    except Exception as e:
+        bot.answer_callback_query(c.id, f"Ошибка: {e}")
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("adel_do_"))
 def adm_del_act(c):
+    adm_del(c.message)
     delete_product(c.data.split("_")[2])
     bot.answer_callback_query(c.id, "Удалено!")
     bot.delete_message(c.message.chat.id, c.message.message_id)
