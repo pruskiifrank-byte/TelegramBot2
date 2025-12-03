@@ -126,7 +126,8 @@ def back_to_main(call):
 @bot.message_handler(func=lambda m: m.text == "🎒 Забрать подарки")
 @anti_flood
 def handle_buy(message):
-    bot.send.message(
+
+    bot.send_message(
         message.chat.id,
         "Эти товары почти так же хороши, как украденные подарки.\n Хватай, пока не передумал!",
     )
@@ -334,7 +335,7 @@ def handle_prod_payment(call):
             d.get("status") == "waiting_payment"
             and d.get("delivery_status") != "delivered"
         ):
-            if (now - d.get("created_at_ts", 0)) < 7200:
+            if (now - d.get("created_at_ts", 0)) < 3600:  # 3600 сек = 1 часа
                 unpaid += 1
 
     if unpaid >= MAX_UNPAID_ORDERS:
@@ -347,43 +348,82 @@ def handle_prod_payment(call):
 
     # 2. Поиск свободного товара в этом районе
     # Нам пришел ID одного из товаров (target_id). Узнаем его имя и район.
-    target_id = int(call.data.split("_")[1])
-    target_info = get_product_details_by_id(target_id)
+    try:
+        target_id = int(call.data.split("_")[1])
+        target_info = get_product_details_by_id(target_id)
+    except:
+        target_info = None
 
     if not target_info:
         return bot.send_message(uid, "❌ Ошибка: товар не найден.")
 
-    name = target_info["product_name"]
-    address = target_info["address"]
-
-    # 3. Ищем ЛЮБОЙ свободный ID с таким именем и районом
-    # (Это нужно на случай, если конкретно target_id уже кто-то купил, пока мы смотрели меню)
-    real_pid = get_fresh_product_id(name, address)
-
+    real_pid = get_fresh_product_id(target_info["product_name"], target_info["address"])
     if not real_pid:
         return bot.send_message(
-            uid, f"❌ В этом районе {address} товар украден. Выберите другой."
+            uid,
+            f"❌ В этом районе {target_info['address']} товар украден. Выберите другой.",
         )
 
     details = get_product_details_by_id(real_pid)
-
     temp_oid = f"ORD-{int(time.time())}-{uid}"
+
     res = create_invoice(uid, details["price_usd"], temp_oid)
     if not res:
         return bot.send_message(uid, "❌ Ошибка создания ссылки.")
-    # Шутки гринча
+    # Анимация Гринча
     msg = bot.send_message(uid, "😈 Гринч спускается в дымоход...")
-    time.sleep(1)  # Ждем 1 секунду
-
-    bot.edit_message_text("🎒 Упаковываем добычу...", uid, msg.message_id)
     time.sleep(1)
+    try:
+        bot.edit_message_text("🎒 Упаковываем добычу...", uid, msg.message_id)
+    except:
+        pass
+    time.sleep(1)
+    try:
+        bot.delete_message(uid, msg.message_id)
+    except:
+        pass
 
-    bot.delete_message(uid, msg.message_id)
+    res = create_invoice(uid, details["price_usd"], temp_oid)
+    if not res:
+        return bot.send_message(uid, "❌ Ошибка создания ссылки.")
 
     pay_url, track_id = res
     real_oid = add_order(
-        uid, real_pid, details["price_usd"], address, temp_oid, track_id, pay_url
+        uid,
+        real_pid,
+        details["price_usd"],
+        details["address"],
+        temp_oid,
+        track_id,
+        pay_url,
     )
+
+    bot.send_message(uid, "✅ <b>Заказ создан! ⏰ БРОНЬ 1 ЧАС!</b>", parse_mode="HTML")
+    bot.send_message(uid, "ℹ️ Статус глянь в <b>📦 Мои подарки</b>.", parse_mode="HTML")
+
+    text = (
+        f"🧾 <b>Заказ №{real_oid}</b>\n\n"
+        f"📦 Товар: <b>{details['product_name']}</b>\n"
+        f"📍 Район: <b>{details['address']}</b>\n"
+        f"💰 К оплате: <b>{details['price_usd']} $</b>\n\n"
+        f"⚠️ <i>Фото и описание придут автоматически после оплаты.</i>"
+    )
+
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("💳 Оплатить", url=pay_url))
+    kb.add(types.InlineKeyboardButton("🔙 Отмена", callback_data=f"pname_{target_id}"))
+
+    # ИСПОЛЬЗУЕМ EDIT, ЧТОБЫ НЕ СПАМИТЬ
+    try:
+        bot.edit_message_text(
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=kb,
+            parse_mode="HTML",
+        )
+    except:
+        bot.send_message(uid, text, reply_markup=kb, parse_mode="HTML")
 
     # --- ВАШИ СООБЩЕНИЯ ---
     bot.send_message(
@@ -860,50 +900,40 @@ def edit_save(m):
 def admin_backup(message):
     if message.from_user.id not in ADMIN_IDS:
         return
-
-    msg = bot.send_message(message.chat.id, "⏳ Собираю данные и архивирую...")
-
-    # Таблицы, которые хотим скачать
+    msg = bot.send_message(message.chat.id, "Архивирую...")
     tables = ["users", "orders", "products", "stores"]
-
-    # Создаем буфер в памяти для ZIP-архива
     zip_buffer = io.BytesIO()
 
     try:
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
             for table in tables:
                 headers, rows = get_table_data(table)
-
                 if not headers:
                     continue
 
-                # Создаем CSV файл в памяти
                 csv_buffer = io.StringIO()
-                writer = csv.writer(csv_buffer)
-                writer.writerow(headers)  # Заголовки
-                writer.writerows(rows)  # Данные
-
-                # Добавляем CSV в ZIP
+                # ИСПРАВЛЕНО: Добавляем метку BOM для Excel
+                csv_buffer.write("\ufeff")
+                # ИСПРАВЛЕНО: Разделитель точка с запятой
+                writer = csv.writer(csv_buffer, delimiter=";")
+                writer.writerow(headers)
+                writer.writerows(rows)
                 zip_file.writestr(f"{table}.csv", csv_buffer.getvalue())
 
-        # Готовим файл к отправке
         zip_buffer.seek(0)
         date_str = datetime.now().strftime("%Y-%m-%d_%H-%M")
-        filename = f"backup_{date_str}.zip"
 
+        # ИСПРАВЛЕНО: parse_mode="HTML"
         bot.send_document(
             message.chat.id,
             zip_buffer,
-            # 1. Меняем звездочки ** на тег <b>
-            caption=f"✅ <b>Полный бэкап базы данных</b>\n📅 Дата: {date_str}",
-            visible_file_name=filename,
-            # 2. Меняем режим на HTML (он не ломается от символа '_')
+            caption=f"✅ <b>Бэкап от {date_str}</b>",
+            visible_file_name=f"backup_{date_str}.zip",
             parse_mode="HTML",
         )
         bot.delete_message(message.chat.id, msg.message_id)
-
     except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Ошибка бэкапа: {e}")
+        bot.send_message(message.chat.id, f"Ошибка: {e}")
 
 
 # --- ИМПОРТ (CSV ЗАГРУЗКА) ---
@@ -927,68 +957,39 @@ def import_start(message):
 
 
 @bot.message_handler(content_types=["document"])
+@bot.message_handler(content_types=["document"])
 def handle_csv_import(message):
     if message.from_user.id not in ADMIN_IDS:
         return
-
     try:
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
 
-        # Читаем файл из памяти
+        # ИСПРАВЛЕНО: TextIOWrapper для кодировки и delimiter=';'
         csv_file = io.TextIOWrapper(io.BytesIO(downloaded_file), encoding="utf-8")
-        reader = csv.reader(
-            csv_file, delimiter=";"
-        )  # Важно: Excel часто использует точку с запятой
+        reader = csv.reader(csv_file, delimiter=";")
 
         success = 0
-        errors = 0
-
-        # Пропускаем заголовок, если есть (попробуем определить)
-        # Лучше просто читать всё подряд
-
         for row in reader:
-            # Ожидаем 6 колонок
             if len(row) < 6:
-                errors += 1
                 continue
-
-            # Распаковка: Категория; Название; Цена; Район; Клад; ФотоID
-            cat_name = row[0].strip()
-            name = row[1].strip()
-            price_str = row[2].strip().replace(",", ".")
-            address = row[3].strip()
-            desc = row[4].strip()
-            file_id = row[5].strip()
-
-            # 1. Ищем категорию
-            sid = get_store_id_by_title(cat_name)
-            if not sid:
-                # Если категории нет — можно создать или пропустить. Пока пропустим.
-                # Или можно создать: execute_query("INSERT INTO stores...", (cat_name,))
-                errors += 1
-                continue
-
-            # 2. Валидация цены
-            try:
-                price = float(price_str)
-            except:
-                errors += 1
-                continue
-
-            # 3. Добавляем товар
-            insert_product(sid, name, price, desc, file_id, address)
-            success += 1
-
-        bot.reply_to(
-            message, f"✅ Успешно добавлено: {success}\n⚠️ Ошибок/Пропусков: {errors}"
-        )
-
+            cat, name, price, addr, desc, fid = (
+                row[0],
+                row[1],
+                row[2],
+                row[3],
+                row[4],
+                row[5],
+            )
+            sid = get_store_id_by_title(cat)
+            if sid:
+                insert_product(
+                    sid, name, float(price.replace(",", ".")), desc, fid, addr
+                )
+                success += 1
+        bot.reply_to(message, f"✅ Добавлено: {success}")
     except Exception as e:
-        bot.reply_to(
-            message,
-            f"❌ Ошибка файла: {e}\nУбедитесь, что кодировка UTF-8, а разделитель — точка с запятой (;).",
-        )
+        bot.reply_to(message, f"❌ Ошибка: {e}")
 
 
 @bot.message_handler(content_types=["photo"])
