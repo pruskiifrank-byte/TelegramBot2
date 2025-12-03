@@ -3,12 +3,14 @@ import telebot
 from telebot import types
 from telebot.types import InputMediaPhoto
 import time
+import threading
 import math
 import csv
 import io
 import zipfile
 import random
 from datetime import datetime
+from bot.stats import get_statistics
 from bot.db import execute_query
 from bot.config import TELEGRAM_TOKEN, ADMIN_IDS, SUPPORT_LINK, REVIEWS_LINK, NEWS_LINK
 from bot.payment import create_invoice, verify_payment_via_api
@@ -563,6 +565,7 @@ def admin_panel(message):
     kb.add("➕ Добавить товар", "✏️ Изменить товар")
     kb.add("📢 Рассылка", "🎁 Выдать товар")
     kb.add("💾 Бэкап БД", "📥 Импорт (CSV)")
+    kb.add("📥 Импорт (CSV)", "📊 Статистика")
     kb.add("🛠 Тех. пауза", "🔙 Меню")
     bot.send_message(message.chat.id, "Админка Гринча 😈", reply_markup=kb)
 
@@ -1105,6 +1108,59 @@ def admin_backup(message):
         bot.send_message(message.chat.id, f"Ошибка: {e}")
 
 
+# --- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ СОЗДАНИЯ БЭКАПА ---
+def create_backup_zip():
+    tables = ["users", "orders", "products", "stores"]
+    zip_buffer = io.BytesIO()
+    try:
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for table in tables:
+                headers, rows = get_table_data(table)
+                if not headers:
+                    continue
+                csv_buffer = io.StringIO()
+                csv_buffer.write("\ufeff")  # BOM для Excel
+                writer = csv.writer(csv_buffer, delimiter=";")
+                writer.writerow(headers)
+                writer.writerows(rows)
+                zip_file.writestr(f"{table}.csv", csv_buffer.getvalue())
+        zip_buffer.seek(0)
+        return zip_buffer
+    except:
+        return None
+
+
+# --- ФОНОВАЯ ЗАДАЧА АВТО-БЭКАПА ---
+def auto_backup_loop():
+    while True:
+        # Ждем 4 часа (14400 секунд)
+        time.sleep(14400)
+
+        # Создаем бэкап
+        zip_file = create_backup_zip()
+        if zip_file:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+            filename = f"AUTO_BACKUP_{date_str}.zip"
+
+            # Рассылаем всем админам
+            for admin_id in ADMIN_IDS:
+                try:
+                    # Важно: нужно отмотать буфер в начало для каждого админа
+                    zip_file.seek(0)
+                    bot.send_document(
+                        admin_id,
+                        zip_file,
+                        caption=f"🕒 <b>Ежедневный авто-бэкап</b>\n📅 {date_str}",
+                        visible_file_name=filename,
+                        parse_mode="HTML",
+                    )
+                except Exception as e:
+                    print(f"Backup send error: {e}")
+
+
+# ЗАПУСК ПОТОКА БЭКАПА (Вставьте эту строку один раз, чтобы она сработала при старте)
+threading.Thread(target=auto_backup_loop, daemon=True).start()
+
 # --- УПРАВЛЕНИЕ ТЕХ. ПАУЗОЙ ---
 
 
@@ -1213,3 +1269,14 @@ def view_photo_by_id(message):
 
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ Ошибка. Возможно код неверный.\n{e}")
+
+
+@bot.message_handler(func=lambda m: m.text == "📊 Статистика")
+def show_stats(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    # Вызываем функцию из нашего нового файла
+    report = get_statistics()
+
+    bot.send_message(message.chat.id, report, parse_mode="HTML")
