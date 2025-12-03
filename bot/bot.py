@@ -29,6 +29,7 @@ from bot.storage import (
     get_districts_for_product,
     get_fresh_product_id,
     get_table_data,
+    get_store_id_by_title,
 )
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="HTML", threaded=False)
@@ -103,8 +104,8 @@ def cmd_start(message):
     )
 
     welcome_text = (
-        f"Ты снова здесь? (Ворчит) Ну, привет, {message.from_user.first_name}"
-        "Это магазин Гринча. И да, я слежу за тобой.\n",
+        f"Ты снова здесь? (Ворчит)  Ну, привет,  {message.from_user.first_name}"
+        " Это магазин Гринча. И да , я слежу за тобой.\n",
     )
 
     bot.send_message(
@@ -512,9 +513,10 @@ def admin_panel(message):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("➕ Добавить товар", "✏️ Изменить товар")
     kb.add("❌ Удалить товар", "🎁 Выдать товар")
-    kb.add("📢 Рассылка", "💾 Бэкап БД")  # <--- НОВАЯ КНОПКА
+    kb.add("📢 Рассылка", "💾 Бэкап БД")
+    kb.add("📥 Импорт (CSV)")
     kb.add("🔙 Меню")
-    bot.send_message(message.chat.id, "Админка:", reply_markup=kb)
+    bot.send_message(message.chat.id, "Админка Гринча 😈", reply_markup=kb)
 
 
 @bot.message_handler(func=lambda m: m.text == "🔙 Меню")
@@ -902,3 +904,96 @@ def admin_backup(message):
 
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ Ошибка бэкапа: {e}")
+
+
+# --- ИМПОРТ (CSV ЗАГРУЗКА) ---
+
+
+@bot.message_handler(func=lambda m: m.text == "📥 Импорт (CSV)")
+def import_start(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    text = (
+        "📄 <b>Загрузка товаров списком</b>\n\n"
+        "1. Создайте таблицу в Excel.\n"
+        "2. Колонки: <code>Категория;Название;Цена;Район;Описание;File_ID</code>\n"
+        "3. Сохраните как <b>CSV (разделитель - точка с запятой)</b>.\n"
+        "4. Отправьте файл сюда.\n\n"
+        "<i>Пример строки:</i>\n"
+        "<code>Шиш;Super Haze;10.5;Центр;Тайник в камне;AgAC...</code>"
+    )
+    bot.send_message(message.chat.id, text, parse_mode="HTML")
+
+
+@bot.message_handler(content_types=["document"])
+def handle_csv_import(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    try:
+        file_info = bot.get_file(message.document.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+
+        # Читаем файл из памяти
+        csv_file = io.TextIOWrapper(io.BytesIO(downloaded_file), encoding="utf-8")
+        reader = csv.reader(
+            csv_file, delimiter=";"
+        )  # Важно: Excel часто использует точку с запятой
+
+        success = 0
+        errors = 0
+
+        # Пропускаем заголовок, если есть (попробуем определить)
+        # Лучше просто читать всё подряд
+
+        for row in reader:
+            # Ожидаем 6 колонок
+            if len(row) < 6:
+                errors += 1
+                continue
+
+            # Распаковка: Категория; Название; Цена; Район; Клад; ФотоID
+            cat_name = row[0].strip()
+            name = row[1].strip()
+            price_str = row[2].strip().replace(",", ".")
+            address = row[3].strip()
+            desc = row[4].strip()
+            file_id = row[5].strip()
+
+            # 1. Ищем категорию
+            sid = get_store_id_by_title(cat_name)
+            if not sid:
+                # Если категории нет — можно создать или пропустить. Пока пропустим.
+                # Или можно создать: execute_query("INSERT INTO stores...", (cat_name,))
+                errors += 1
+                continue
+
+            # 2. Валидация цены
+            try:
+                price = float(price_str)
+            except:
+                errors += 1
+                continue
+
+            # 3. Добавляем товар
+            insert_product(sid, name, price, desc, file_id, address)
+            success += 1
+
+        bot.reply_to(
+            message, f"✅ Успешно добавлено: {success}\n⚠️ Ошибок/Пропусков: {errors}"
+        )
+
+    except Exception as e:
+        bot.reply_to(
+            message,
+            f"❌ Ошибка файла: {e}\nУбедитесь, что кодировка UTF-8, а разделитель — точка с запятой (;).",
+        )
+
+
+@bot.message_handler(content_types=["photo"])
+def get_photo_id_helper(message):
+    if message.from_user.id in ADMIN_IDS:
+        # Берем лучшее качество
+        fid = message.photo[-1].file_id
+        bot.reply_to(message, f"🆔 Код фото:\n<code>{fid}</code>", parse_mode="HTML")

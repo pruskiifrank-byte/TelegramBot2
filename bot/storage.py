@@ -320,3 +320,13 @@ def get_table_data(table_name):
     rows = execute_query(query_data, fetch=True)
 
     return headers, rows
+
+
+def get_store_id_by_title(title):
+    """Ищет ID магазина по названию (без учета регистра)."""
+    # ILIKE - поиск без учета регистра
+    query = "SELECT store_id FROM stores WHERE title ILIKE %s;"
+    res = execute_query(query, (title.strip(),), fetch=True)
+    if res:
+        return res[0][0]
+    return None
