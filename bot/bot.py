@@ -150,7 +150,7 @@ def handle_buy(message):
             )
         )
 
-    bot.send_message(message.chat.id, "📂 Выберите категорию:", reply_markup=kb)
+    bot.send_message(message.chat.id, "📂 Выберите Магазин:", reply_markup=kb)
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("store_"))
