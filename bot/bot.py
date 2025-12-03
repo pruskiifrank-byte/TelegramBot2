@@ -7,6 +7,7 @@ import math
 import csv
 import io
 import zipfile
+import random
 from datetime import datetime
 from bot.config import TELEGRAM_TOKEN, ADMIN_IDS, SUPPORT_LINK, REVIEWS_LINK, NEWS_LINK
 from bot.payment import create_invoice, verify_payment_via_api
@@ -41,6 +42,19 @@ flood_control = {}
 PRODUCTS_PER_PAGE = 5
 FLOOD_LIMIT = 0.5
 MAX_UNPAID_ORDERS = 1
+
+GRINCH_JOKES = [
+    "💚 «Не переживай, я почти добрый сегодня!»",
+    "👀 «Если что-то пойдёт не так — это не я!»",
+    "🎁 Гринч шепчет: «Это не подарок… это стратегическая пакость!»",
+    "😈 «Будь осторожен: я могу случайно сделать что-то приличное.»",
+    "🎄 «Праздник? Хм… звучит как повод что-нибудь украсть.»",
+    "🎁 «Это не сюрприз — это сюрприииизс! (Ты поймёшь позже.)»",
+    "🤏 «Я почти хороший. Примерно на сантиметр.»",
+    "🎁 «Это подарок? Нет, это тщательно завернутая проблема.»",
+    "😏 «Спокойно. Моя пакость сертифицирована и почти безопасна.»",
+    "🎁 «Упаковал с любовью. Разворачивай на свой страх и риск.»",
+]
 
 
 def send_product_visuals(chat_id, file_path_str, caption):
@@ -102,10 +116,12 @@ def cmd_start(message):
     upsert_user(
         message.chat.id, message.from_user.username, message.from_user.first_name
     )
+    joke = random.choice(GRINCH_JOKES)
 
     welcome_text = (
-        f"Ты снова здесь? (Ворчит)  Ну, привет,  {message.from_user.first_name}"
-        " Это магазин Гринча. И да , я слежу за тобой.\n",
+        f"🎄 Привет,  {message.from_user.first_name}! 🎁"
+        " Добро пожаловать к Гринчу!\n",
+        f"<i>{joke}</i>",
     )
 
     bot.send_message(
@@ -115,11 +131,18 @@ def cmd_start(message):
 
 @bot.callback_query_handler(func=lambda c: c.data == "cmd_main_menu")
 def back_to_main(call):
+    # Выбираем случайную шутку
+    joke = random.choice(GRINCH_JOKES)
+
     try:
         bot.delete_message(call.message.chat.id, call.message.message_id)
     except:
         pass
-    bot.send_message(call.message.chat.id, "Главное меню:", reply_markup=main_menu())
+    bot.send_message(
+        call.message.chat.id,
+        "Главное меню:\n" f"<i>{joke}</i>",
+        reply_markup=main_menu(),
+    )
 
 
 # --- ПОКУПКА ---
@@ -242,7 +265,7 @@ def handle_reviews(message):
 @anti_flood
 def handle_rules(message):
     text = (
-        "📜 <b>ПРАВИЛА МАГАЗИНА</b>\n\n"
+        "📜 <b>Правила в которых магазин расматривает ПЗ </b>\n\n"
         "1. Видео подхода к месту .\n"
         "2. Иметь 5 покупок .\n"
         "3. Спам оператору = бан.\n"
@@ -397,9 +420,6 @@ def handle_prod_payment(call):
         track_id,
         pay_url,
     )
-
-    bot.send_message(uid, "✅ <b>Заказ создан! ⏰ БРОНЬ 1 ЧАС!</b>", parse_mode="HTML")
-    bot.send_message(uid, "ℹ️ Статус глянь в <b>📦 Мои подарки</b>.", parse_mode="HTML")
 
     text = (
         f"🧾 <b>Заказ №{real_oid}</b>\n\n"
@@ -943,64 +963,41 @@ def admin_backup(message):
 def import_start(message):
     if message.from_user.id not in ADMIN_IDS:
         return
-
-    text = (
-        "📄 <b>Загрузка товаров списком</b>\n\n"
-        "1. Создайте таблицу в Excel.\n"
-        "2. Колонки: <code>Категория;Название;Цена;Район;Описание;File_ID</code>\n"
-        "3. Сохраните как <b>CSV (разделитель - точка с запятой)</b>.\n"
-        "4. Отправьте файл сюда.\n\n"
-        "<i>Пример строки:</i>\n"
-        "<code>Шиш;Super Haze;10.5;Центр;Тайник в камне;AgAC...</code>"
-    )
-    bot.send_message(message.chat.id, text, parse_mode="HTML")
+    text = "📄 Пришлите CSV файл (разделитель ;).\nФормат: Категория;Название;Цена;Район;Описание;File_ID"
+    bot.send_message(message.chat.id, text)
 
 
-@bot.message_handler(content_types=["document"])
-@bot.message_handler(content_types=["document"])
 @bot.message_handler(content_types=["document"])
 def handle_csv_import(message):
     if message.from_user.id not in ADMIN_IDS:
         return
 
-    # 1. Проверка расширения
+    # Проверка расширения
     if not message.document.file_name.lower().endswith(".csv"):
         return bot.send_message(
-            message.chat.id,
-            "❌ Это не CSV файл!\nСохраните таблицу как <b>CSV (разделитель - точка с запятой)</b> и попробуйте снова.",
-            parse_mode="HTML",
+            message.chat.id, "❌ Это не CSV файл!", parse_mode="HTML"
         )
 
     try:
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
 
-        # 2. Пробуем разгадать кодировку (UTF-8 или Windows-1251)
+        # Пробуем разные кодировки
         try:
-            # Сначала пробуем UTF-8 (стандарт)
             csv_text = downloaded_file.decode("utf-8")
         except UnicodeDecodeError:
             try:
-                # Если не вышло, пробуем Windows-1251 (Excel по умолчанию)
                 csv_text = downloaded_file.decode("cp1251")
             except:
-                return bot.send_message(
-                    message.chat.id,
-                    "❌ Непонятная кодировка файла. Сохраните как CSV UTF-8.",
-                )
+                return bot.send_message(message.chat.id, "❌ Ошибка кодировки файла.")
 
-        # Читаем из строки
         csv_file = io.StringIO(csv_text)
         reader = csv.reader(csv_file, delimiter=";")
 
         success = 0
-        errors = 0
-
         for row in reader:
-            # Пропускаем пустые или короткие строки
             if len(row) < 6:
                 continue
-
             cat, name, price, addr, desc, fid = (
                 row[0],
                 row[1],
@@ -1010,13 +1007,9 @@ def handle_csv_import(message):
                 row[5],
             )
 
-            # Очищаем от пробелов
-            cat = cat.strip()
-
-            sid = get_store_id_by_title(cat)
+            sid = get_store_id_by_title(cat.strip())
             if sid:
                 try:
-                    # Заменяем запятую на точку в цене
                     price_float = float(price.replace(",", ".").strip())
                     insert_product(
                         sid,
@@ -1028,20 +1021,29 @@ def handle_csv_import(message):
                     )
                     success += 1
                 except:
-                    errors += 1
-            else:
-                # Категория не найдена
-                errors += 1
+                    pass
 
         bot.send_message(
             message.chat.id,
-            f"✅ <b>Импорт завершен!</b>\nДобавлено: {success}\nПропущено/Ошибок: {errors}",
+            f"✅ <b>Импорт завершен!</b>\nДобавлено: {success}",
             parse_mode="HTML",
         )
 
     except Exception as e:
-        # Используем send_message вместо reply_to, чтобы не падать, если сообщение удалено
         bot.send_message(message.chat.id, f"❌ Критическая ошибка импорта: {e}")
+
+
+@bot.message_handler(content_types=["photo"])
+def get_photo_id_helper(message):
+    if message.from_user.id in ADMIN_IDS:
+        fid = message.photo[-1].file_id
+        try:
+            # Используем send_message вместо reply_to, чтобы избежать ошибок
+            bot.send_message(
+                message.chat.id, f"🆔 Код фото:\n<code>{fid}</code>", parse_mode="HTML"
+            )
+        except:
+            pass
 
 
 @bot.message_handler(content_types=["photo"])
