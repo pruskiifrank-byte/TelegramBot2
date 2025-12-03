@@ -9,6 +9,7 @@ import io
 import zipfile
 import random
 from datetime import datetime
+from bot.db import execute_query
 from bot.config import TELEGRAM_TOKEN, ADMIN_IDS, SUPPORT_LINK, REVIEWS_LINK, NEWS_LINK
 from bot.payment import create_invoice, verify_payment_via_api
 from bot.storage import (
@@ -43,6 +44,7 @@ flood_control = {}
 PRODUCTS_PER_PAGE = 5
 FLOOD_LIMIT = 0.5
 MAX_UNPAID_ORDERS = 1
+MAINTENANCE_MODE = False
 
 GRINCH_JOKES = [
     "💚 «Не переживай, я почти добрый сегодня!»",
@@ -127,6 +129,37 @@ def back_to_main(call):
     bot.send_message(
         call.message.chat.id, f"Главное меню:\n<i>{joke}</i>", reply_markup=main_menu()
     )
+
+
+# --- БЛОКИРОВЩИК (ТЕХ. ПАУЗА) ---
+@bot.message_handler(
+    func=lambda m: MAINTENANCE_MODE and m.from_user.id not in ADMIN_IDS
+)
+@bot.callback_query_handler(
+    func=lambda c: MAINTENANCE_MODE and c.from_user.id not in ADMIN_IDS
+)
+def maintenance_filter(call_or_message):
+    # Определяем ID чата и пользователя
+    if isinstance(call_or_message, types.CallbackQuery):
+        chat_id = call_or_message.message.chat.id
+        # Обязательно отвечаем на колбэк, чтобы кнопка не крутилась
+        try:
+            bot.answer_callback_query(call_or_message.id, "⛔️ Технические работы!")
+        except:
+            pass
+    else:
+        chat_id = call_or_message.chat.id
+
+    text = (
+        "🚧 <b>МАГАЗИН НА ТЕХ. ОБСЛУЖИВАНИИ</b> 🚧\n\n"
+        "Гринч временно закрыл лавочку, чтобы пересчитать добычу.\n"
+        "<i>Возвращайся чуть позже!</i> 🕐"
+    )
+    try:
+        bot.send_message(chat_id, text, parse_mode="HTML")
+    except:
+        pass
+    # Больше ничего не делаем, прерываем обработку для этого юзера
 
 
 # --- ПОКУПКА ---
@@ -245,10 +278,27 @@ def handle_district_selection(call):
         )
 
     kb.add(*buttons)
-    store_id = user_state.get(call.from_user.id, {}).get("store_id", "1")
+
+    # --- ИСПРАВЛЕННИЕ ЛОГИКИ КНОПКИ НАЗАД ---
+    # Получаем store_id товара, используя ref_id, для корректного возврата
+    try:
+        from bot.db import execute_query
+
+        res = execute_query(
+            "SELECT store_id FROM products WHERE product_id = %s", (ref_id,), fetch=True
+        )
+        real_store_id = res[0][0] if res else "1"
+    except Exception as e:
+        # Fallback, если что-то пошло не так
+        print(f"Ошибка получения store_id: {e}")
+        real_store_id = "1"
+
     kb.add(
-        types.InlineKeyboardButton("🔙 Сбежать", callback_data=f"store_{store_id}_0")
+        types.InlineKeyboardButton(
+            "🔙 Сбежать", callback_data=f"store_{real_store_id}_0"
+        )
     )
+    # ----------------------------------------
 
     text = f"<b>{name}</b>\n\nЦена: {price} $\nВыберите подходящий район:"
     try:
@@ -355,6 +405,8 @@ def handle_prod_payment(call):
         f"📦 Товар: <b>{details['product_name']}</b>\n"
         f"📍 Район: <b>{details['address']}</b>\n"
         f"💰 К оплате: <b>{details['price_usd']} $</b>\n\n"
+        f" Оплатить на карту можно\n с помощью 👉 @braumilka\n\n"
+
         f"⚠️ <i>Фото и описание свалятся тебе автоматически после оплаты… если уж так надо.</i>"
     )
 
@@ -502,7 +554,8 @@ def admin_panel(message):
     kb.add("➕ Добавить товар", "✏️ Изменить товар")
     kb.add("❌ Удалить товар", "🎁 Выдать товар")
     kb.add("📢 Рассылка", "💾 Бэкап БД")
-    kb.add("📥 Импорт (CSV)", "🔙 Меню")
+    kb.add("📥 Импорт (CSV)", "🛠 Тех. пауза")
+    kb.add("🔙 Меню")
     bot.send_message(message.chat.id, "Админка Гринча 😈", reply_markup=kb)
 
 
@@ -939,6 +992,89 @@ def admin_backup(message):
         bot.delete_message(message.chat.id, msg.message_id)
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка: {e}")
+
+
+# --- УПРАВЛЕНИЕ ТЕХ. ПАУЗОЙ ---
+
+
+@bot.message_handler(func=lambda m: m.text == "🛠 Тех. пауза")
+def maintenance_menu(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    # Проверяем текущий статус
+    status_text = (
+        "🔴 ВКЛЮЧЕНА (Магазин закрыт)"
+        if MAINTENANCE_MODE
+        else "🟢 ВЫКЛЮЧЕНА (Магазин работает)"
+    )
+
+    kb = types.InlineKeyboardMarkup()
+    if MAINTENANCE_MODE:
+        # Если включена - кнопка выключить
+        kb.add(
+            types.InlineKeyboardButton("🟢 ОТКРЫТЬ МАГАЗИН", callback_data="maint_off")
+        )
+    else:
+        # Если выключена - кнопка включить с подтверждением
+        kb.add(
+            types.InlineKeyboardButton("🔴 ЗАКРЫТЬ МАГАЗИН", callback_data="maint_ask")
+        )
+
+    bot.send_message(
+        message.chat.id,
+        f"🛠 <b>Статус тех. паузы:</b>\n{status_text}",
+        reply_markup=kb,
+        parse_mode="HTML",
+    )
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "maint_ask")
+def maintenance_ask(c):
+    # Спрашиваем подтверждение
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("Да, закрыть доступ", callback_data="maint_on"))
+    kb.add(types.InlineKeyboardButton("Нет, отмена", callback_data="maint_cancel"))
+
+    bot.edit_message_text(
+        "⚠️ <b>Вы уверены?</b>\nПользователи не смогут ничего купить, пока вы не отключите паузу.",
+        c.message.chat.id,
+        c.message.message_id,
+        reply_markup=kb,
+        parse_mode="HTML",
+    )
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "maint_on")
+def maintenance_on(c):
+    global MAINTENANCE_MODE
+    MAINTENANCE_MODE = True
+    bot.answer_callback_query(c.id, "Магазин закрыт!")
+    bot.edit_message_text(
+        "🔴 <b>ТЕХ. ПАУЗА ВКЛЮЧЕНА.</b>\n Пользователи видят заглушку. Админы могут работать.",
+        c.message.chat.id,
+        c.message.message_id,
+        parse_mode="HTML",
+    )
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "maint_off")
+def maintenance_off(c):
+    global MAINTENANCE_MODE
+    MAINTENANCE_MODE = False
+    bot.answer_callback_query(c.id, "Магазин открыт!")
+    bot.edit_message_text(
+        "🟢 <b>ТЕХ. ПАУЗА ВЫКЛЮЧЕНА.</b>\nМагазин снова работает.",
+        c.message.chat.id,
+        c.message.message_id,
+        parse_mode="HTML",
+    )
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "maint_cancel")
+def maintenance_cancel(c):
+    bot.delete_message(c.message.chat.id, c.message.message_id)
+    admin_panel(c.message)
 
 
 @bot.message_handler(commands=["img"])
