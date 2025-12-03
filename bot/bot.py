@@ -939,3 +939,30 @@ def admin_backup(message):
         bot.delete_message(message.chat.id, msg.message_id)
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка: {e}")
+
+
+@bot.message_handler(commands=["img"])
+def view_photo_by_id(message):
+    # Проверка на админа
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    try:
+        # Разделяем сообщение "/img AgAC..." на части
+        args = message.text.split()
+
+        # Если нет ID (просто написали /img)
+        if len(args) < 2:
+            return bot.send_message(
+                message.chat.id,
+                "⚠️ Используйте так:\n<code>/img AgAC...ваш_код...</code>",
+                parse_mode="HTML",
+            )
+
+        file_id = args[1]  # Берем код
+
+        # Бот отправляет фото
+        bot.send_photo(message.chat.id, file_id, caption="✅ Вот фото по этому ID")
+
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ Ошибка. Возможно код неверный.\n{e}")
