@@ -122,7 +122,7 @@ def cmd_start(message):
         "@scooby_doorezerv2 \n"
         "@scoobbyy_doo \n"
         "@mrgrinchs \n"
-        "Это все актуальные линки \n\n" 
+        "Это все актуальные линки \n\n"
         f"<i>{joke}</i>"
     )
     bot.send_message(
@@ -561,10 +561,9 @@ def admin_panel(message):
         return
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("➕ Добавить товар", "✏️ Изменить товар")
-    kb.add("❌ Удалить товар", "🎁 Выдать товар")
-    kb.add("📢 Рассылка", "💾 Бэкап БД")
-    kb.add("📥 Импорт (CSV)", "🛠 Тех. пауза")
-    kb.add("🔙 Меню")
+    kb.add("📢 Рассылка", "🎁 Выдать товар")
+    kb.add("💾 Бэкап БД", "📥 Импорт (CSV)")
+    kb.add("🛠 Тех. пауза", "🔙 Меню")
     bot.send_message(message.chat.id, "Админка Гринча 😈", reply_markup=kb)
 
 
@@ -831,9 +830,18 @@ def edit_field(c):
     admin_state[c.from_user.id] = {"edit_pid": pid}
 
     details = get_product_details_by_id(pid)
-    info = f"📦 {details['product_name']}\n📍 {details['address']}\n📝 Note: {details.get('admin_note', '-')}"
+    if not details:
+        return bot.answer_callback_query(c.id, "Товар не найден (возможно, удален).")
+
+    info = (
+        f"📦 <b>{details['product_name']}</b>\n"
+        f"📍 {details['address']}\n"
+        f"💵 {details['price_usd']} $\n"
+        f"📝 Заметка: {details.get('admin_note', '-')}"
+    )
 
     kb = types.InlineKeyboardMarkup()
+    # Основные поля
     kb.add(
         types.InlineKeyboardButton("Название", callback_data="edf_name"),
         types.InlineKeyboardButton("Цена", callback_data="edf_price_usd"),
@@ -842,10 +850,42 @@ def edit_field(c):
         types.InlineKeyboardButton("Адрес", callback_data="edf_address"),
         types.InlineKeyboardButton("Заметка", callback_data="edf_admin_note"),
     )
-    kb.add(types.InlineKeyboardButton("🗑 УДАЛИТЬ", callback_data=f"adel_do_{pid}"))
+
+    # НОВЫЕ КНОПКИ: Клад, Фото, Удалить
+    kb.add(
+        types.InlineKeyboardButton("Изменить Клад", callback_data="edf_delivery_text")
+    )
+    kb.add(
+        types.InlineKeyboardButton("📸 ИЗМЕНИТЬ ФОТО", callback_data="edf_file_path")
+    )
+
+    # Кнопка удаления (красная, если бы можно было красить, но визуально отделена)
+    kb.add(
+        types.InlineKeyboardButton(
+            "🗑 УДАЛИТЬ ТОВАР", callback_data=f"del_from_edit_{pid}"
+        )
+    )
+
+    # Кнопка назад к списку
+    # (Нужно знать store_id, попробуем достать его)
+    try:
+        res = execute_query(
+            "SELECT store_id FROM products WHERE product_id = %s", (pid,), fetch=True
+        )
+        sid = res[0][0] if res else "1"
+    except:
+        sid = "1"
+
+    kb.add(
+        types.InlineKeyboardButton("🔙 Назад к списку", callback_data=f"edit_s_{sid}")
+    )
 
     bot.edit_message_text(
-        f"{info}\nЧто меняем?", c.message.chat.id, c.message.message_id, reply_markup=kb
+        f"{info}\n\nЧто меняем?",
+        c.message.chat.id,
+        c.message.message_id,
+        reply_markup=kb,
+        parse_mode="HTML",
     )
 
 
@@ -853,20 +893,82 @@ def edit_field(c):
 def edit_val(c):
     field = c.data.replace("edf_", "")
     admin_state[c.from_user.id]["edit_field"] = field
-    msg = bot.send_message(c.message.chat.id, "Новое значение:")
+
+    text = "Введите новое значение:"
+    if field == "admin_note":
+        text = "✍️ Введите заметку админа:"
+    elif field == "file_path":
+        text = "📸 Пришлите НОВОЕ фото (или несколько):"
+    elif field == "delivery_text":
+        text = "📦 Введите новый текст клада:"
+
+    msg = bot.send_message(c.message.chat.id, text)
+    # Для фото нужен отдельный обработчик, но используем общий edit_save, он справится
     bot.register_next_step_handler(msg, edit_save)
 
 
 def edit_save(m):
-    d = admin_state[m.from_user.id]
-    val = m.text
-    if d["edit_field"] == "price_usd":
-        try:
-            val = float(val)
-        except:
-            return bot.send_message(m.chat.id, "Ошибка. Нужно число.")
-    update_product_field(d["edit_pid"], d["edit_field"], val)
-    bot.send_message(m.chat.id, "✅ Обновлено!")
+    uid = m.from_user.id
+    if uid not in admin_state:
+        return
+
+    d = admin_state[uid]
+    field = d["edit_field"]
+
+    val = ""
+
+    # Обработка ФОТО
+    if field == "file_path":
+        if m.content_type == "photo":
+            # Берем ID фото
+            val = m.photo[-1].file_id
+        else:
+            return bot.send_message(
+                m.chat.id, "❌ Это не фото. Попробуйте снова через меню."
+            )
+    else:
+        # Обработка ТЕКСТА
+        if not m.text:
+            return bot.send_message(m.chat.id, "❌ Ожидался текст.")
+        val = m.text
+
+        # Проверка цены
+        if field == "price_usd":
+            try:
+                val = float(val.replace(",", "."))
+            except:
+                return bot.send_message(
+                    m.chat.id, "❌ Ошибка. Цена должна быть числом (например 10.5)."
+                )
+
+    update_product_field(d["edit_pid"], field, val)
+
+    bot.send_message(m.chat.id, "✅ Успешно обновлено!")
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("del_from_edit_"))
+def delete_from_edit(c):
+    pid = c.data.split("_")[3]
+
+    # 1. Узнаем ID магазина перед удалением, чтобы вернуться назад
+    sid = "1"
+    try:
+        res = execute_query(
+            "SELECT store_id FROM products WHERE product_id = %s", (pid,), fetch=True
+        )
+        if res:
+            sid = res[0][0]
+    except:
+        pass
+
+    # 2. Удаляем
+    delete_product(pid)
+    bot.answer_callback_query(c.id, "Товар удален.")
+
+    # 3. Возвращаем к списку товаров этой категории
+    # Вызываем функцию списка товаров, подменяя callback.data
+    c.data = f"edit_s_{sid}"
+    edit_list_prods(c)
 
 
 # --- РАССЫЛКА ---
