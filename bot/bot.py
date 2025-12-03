@@ -958,21 +958,49 @@ def import_start(message):
 
 @bot.message_handler(content_types=["document"])
 @bot.message_handler(content_types=["document"])
+@bot.message_handler(content_types=["document"])
 def handle_csv_import(message):
     if message.from_user.id not in ADMIN_IDS:
         return
+
+    # 1. Проверка расширения
+    if not message.document.file_name.lower().endswith(".csv"):
+        return bot.send_message(
+            message.chat.id,
+            "❌ Это не CSV файл!\nСохраните таблицу как <b>CSV (разделитель - точка с запятой)</b> и попробуйте снова.",
+            parse_mode="HTML",
+        )
+
     try:
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
 
-        # ИСПРАВЛЕНО: TextIOWrapper для кодировки и delimiter=';'
-        csv_file = io.TextIOWrapper(io.BytesIO(downloaded_file), encoding="utf-8")
+        # 2. Пробуем разгадать кодировку (UTF-8 или Windows-1251)
+        try:
+            # Сначала пробуем UTF-8 (стандарт)
+            csv_text = downloaded_file.decode("utf-8")
+        except UnicodeDecodeError:
+            try:
+                # Если не вышло, пробуем Windows-1251 (Excel по умолчанию)
+                csv_text = downloaded_file.decode("cp1251")
+            except:
+                return bot.send_message(
+                    message.chat.id,
+                    "❌ Непонятная кодировка файла. Сохраните как CSV UTF-8.",
+                )
+
+        # Читаем из строки
+        csv_file = io.StringIO(csv_text)
         reader = csv.reader(csv_file, delimiter=";")
 
         success = 0
+        errors = 0
+
         for row in reader:
+            # Пропускаем пустые или короткие строки
             if len(row) < 6:
                 continue
+
             cat, name, price, addr, desc, fid = (
                 row[0],
                 row[1],
@@ -981,15 +1009,39 @@ def handle_csv_import(message):
                 row[4],
                 row[5],
             )
+
+            # Очищаем от пробелов
+            cat = cat.strip()
+
             sid = get_store_id_by_title(cat)
             if sid:
-                insert_product(
-                    sid, name, float(price.replace(",", ".")), desc, fid, addr
-                )
-                success += 1
-        bot.reply_to(message, f"✅ Добавлено: {success}")
+                try:
+                    # Заменяем запятую на точку в цене
+                    price_float = float(price.replace(",", ".").strip())
+                    insert_product(
+                        sid,
+                        name.strip(),
+                        price_float,
+                        desc.strip(),
+                        fid.strip(),
+                        addr.strip(),
+                    )
+                    success += 1
+                except:
+                    errors += 1
+            else:
+                # Категория не найдена
+                errors += 1
+
+        bot.send_message(
+            message.chat.id,
+            f"✅ <b>Импорт завершен!</b>\nДобавлено: {success}\nПропущено/Ошибок: {errors}",
+            parse_mode="HTML",
+        )
+
     except Exception as e:
-        bot.reply_to(message, f"❌ Ошибка: {e}")
+        # Используем send_message вместо reply_to, чтобы не падать, если сообщение удалено
+        bot.send_message(message.chat.id, f"❌ Критическая ошибка импорта: {e}")
 
 
 @bot.message_handler(content_types=["photo"])
