@@ -995,6 +995,10 @@ def handle_csv_import(message):
 @bot.message_handler(content_types=["photo"])
 def get_photo_id_helper(message):
     if message.from_user.id in ADMIN_IDS:
-        # Берем лучшее качество
         fid = message.photo[-1].file_id
-        bot.reply_to(message, f"🆔 Код фото:\n<code>{fid}</code>", parse_mode="HTML")
+        try:
+            bot.reply_to(
+                message, f"🆔 Код фото:\n<code>{fid}</code>", parse_mode="HTML"
+            )
+        except:
+            pass
