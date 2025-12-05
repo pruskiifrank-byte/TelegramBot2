@@ -1,4 +1,3 @@
-# bot/storage.py
 from .db import execute_query
 
 
@@ -32,10 +31,10 @@ def get_all_stores():
 def get_products_by_store(store_id):
     """
     Возвращает товары для Админки.
-    Добавили admin_note, чтобы выводить его на кнопках.
+    ИСПРАВЛЕНО: Убрали admin_note, оставили address.
     """
     query = """
-    SELECT product_id, name, price_usd, admin_note 
+    SELECT product_id, name, price_usd, address
     FROM products 
     WHERE store_id = %s AND is_sold = FALSE 
     ORDER BY product_id DESC;
@@ -49,17 +48,18 @@ def get_products_by_store(store_id):
                     "product_id": row[0],
                     "name": row[1],
                     "price_usd": float(row[2]),
-                    "admin_note": (
-                        row[3] if row[3] else ""
-                    ),  # Если заметки нет, будет пустая строка
+                    "address": (row[3] if row[3] else ""),
                 }
             )
     return products_list
 
 
 def get_product_details_by_id(product_id):
+    """
+    ИСПРАВЛЕНО: Убрана лишняя запятая перед FROM и удален admin_note.
+    """
     query = """
-    SELECT p.price_usd, p.file_path, p.delivery_text, p.name, s.title, p.address, p.admin_note
+    SELECT p.price_usd, p.file_path, p.delivery_text, p.name, s.title, p.address
     FROM products p 
     JOIN stores s ON p.store_id = s.store_id 
     WHERE p.product_id = %s;
@@ -67,9 +67,6 @@ def get_product_details_by_id(product_id):
     result = execute_query(query, (product_id,), fetch=True)
     if result:
         row = result[0]
-        # Проверяем длину row, чтобы не было ошибки, если база старая
-        admin_note = row[6] if len(row) > 6 and row[6] else "Нет заметки"
-
         return {
             "price_usd": float(row[0]),
             "file_path": row[1],
@@ -77,20 +74,19 @@ def get_product_details_by_id(product_id):
             "product_name": row[3],
             "shop_title": row[4],
             "address": row[5] if len(row) > 5 else "Не указан",
-            "admin_note": admin_note,
+            # admin_note удален
         }
     return None
 
 
 def update_product_field(product_id, field, value):
-    # Добавили 'admin_note' в разрешенные поля
+    # ИСПРАВЛЕНО: Удален 'admin_note' из разрешенных полей
     allowed_fields = [
         "name",
         "price_usd",
         "delivery_text",
         "file_path",
         "address",
-        "admin_note",
     ]
     if field not in allowed_fields:
         return
@@ -122,8 +118,6 @@ def get_unique_products_by_store(store_id):
 def get_districts_for_product(product_name):
     """
     Группирует товары по районам.
-    Возвращает: [('Космос', 5, 100.0, 123), ('Центр', 2, 100.0, 124)]
-    Где 123 и 124 - это ID первого попавшегося товара в этом районе.
     """
     query = """
     SELECT address, COUNT(*), MIN(price_usd), MIN(product_id)
@@ -140,9 +134,7 @@ def get_districts_for_product(product_name):
                     "address": row[0],
                     "count": row[1],
                     "price": float(row[2]),
-                    "target_id": row[
-                        3
-                    ],  # ID любого товара из этой кучи, чтобы сделать ссылку
+                    "target_id": row[3],
                 }
             )
     return districts
@@ -151,7 +143,6 @@ def get_districts_for_product(product_name):
 def get_fresh_product_id(name, address):
     """
     Ищет любой свободный ID товара с таким именем и районом.
-    Нужно на случай, если кнопку нажали два человека одновременно.
     """
     query = """
     SELECT product_id FROM products 
@@ -160,27 +151,6 @@ def get_fresh_product_id(name, address):
     """
     res = execute_query(query, (name, address), fetch=True)
     return res[0][0] if res else None
-
-
-def get_product_details_by_id(product_id):
-    query = """
-    SELECT p.price_usd, p.file_path, p.delivery_text, p.name, s.title, p.address
-    FROM products p 
-    JOIN stores s ON p.store_id = s.store_id 
-    WHERE p.product_id = %s;
-    """
-    result = execute_query(query, (product_id,), fetch=True)
-    if result:
-        row = result[0]
-        return {
-            "price_usd": float(row[0]),
-            "file_path": row[1],
-            "delivery_text": row[2],
-            "product_name": row[3],
-            "shop_title": row[4],
-            "address": row[5] if len(row) > 5 else "Не указан",
-        }
-    return None
 
 
 def mark_product_as_sold(product_id):
@@ -197,20 +167,10 @@ def insert_product(store_id, name, price, delivery_text, file_path, address):
     execute_query(query, (store_id, name, price, delivery_text, file_path, address))
 
 
-def update_product_field(product_id, field, value):
-    allowed_fields = ["name", "price_usd", "delivery_text", "file_path", "address"]
-    if field not in allowed_fields:
-        return
-    query = f"UPDATE products SET {field} = %s WHERE product_id = %s;"
-    execute_query(query, (value, product_id))
-
-
 def delete_product(product_id):
-
     execute_query(
         "UPDATE orders SET product_id = NULL WHERE product_id = %s;", (product_id,)
     )
-
     execute_query("DELETE FROM products WHERE product_id = %s;", (product_id,))
 
 
@@ -309,18 +269,15 @@ def get_table_data(table_name):
     """
     Возвращает заголовки и все строки таблицы для экспорта.
     """
-    # Список разрешенных таблиц (защита от SQL-инъекций)
     allowed_tables = ["users", "products", "orders", "stores"]
 
     if table_name not in allowed_tables:
         return [], []
 
-    # 1. Получаем названия колонок
     query_cols = f"SELECT column_name FROM information_schema.columns WHERE table_name = '{table_name}';"
     cols_res = execute_query(query_cols, fetch=True)
     headers = [row[0] for row in cols_res] if cols_res else []
 
-    # 2. Получаем данные
     query_data = f"SELECT * FROM {table_name};"
     rows = execute_query(query_data, fetch=True)
 
@@ -328,8 +285,6 @@ def get_table_data(table_name):
 
 
 def get_store_id_by_title(title):
-    """Ищет ID магазина по названию (без учета регистра)."""
-    # ILIKE - поиск без учета регистра
     query = "SELECT store_id FROM stores WHERE title ILIKE %s;"
     res = execute_query(query, (title.strip(),), fetch=True)
     if res:

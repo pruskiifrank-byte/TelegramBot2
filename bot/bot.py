@@ -996,7 +996,6 @@ def edit_field(c):
         f"📦 <b>{details['product_name']}</b>\n"
         f"📍 {details['address']}\n"
         f"💵 {details['price_usd']} $\n"
-        f"📝 Заметка: {details.get('admin_note', '-')}"
     )
 
     kb = types.InlineKeyboardMarkup()
@@ -1007,7 +1006,6 @@ def edit_field(c):
     )
     kb.add(
         types.InlineKeyboardButton("Адрес", callback_data="edf_address"),
-        types.InlineKeyboardButton("Заметка", callback_data="edf_admin_note"),
     )
 
     # НОВЫЕ КНОПКИ: Клад, Фото, Удалить
@@ -1054,9 +1052,7 @@ def edit_val(c):
     admin_state[c.from_user.id]["edit_field"] = field
 
     text = "Введите новое значение:"
-    if field == "admin_note":
-        text = "✍️ Введите заметку админа:"
-    elif field == "file_path":
+    if field == "file_path":
         text = "📸 Пришлите НОВОЕ фото (или несколько):"
     elif field == "delivery_text":
         text = "📦 Введите новый текст клада:"
