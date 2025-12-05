@@ -44,7 +44,7 @@ admin_state = {}
 flood_control = {}
 
 PRODUCTS_PER_PAGE = 5
-FLOOD_LIMIT = 0.5
+FLOOD_LIMIT = 0.7
 MAX_UNPAID_ORDERS = 1
 
 # Тех-пауза
@@ -85,14 +85,35 @@ def send_product_visuals(chat_id, file_path_str, caption):
 
 def anti_flood(func):
     def wrapper(message):
-        uid = (
-            message.from_user.id
-            if isinstance(message, types.CallbackQuery)
-            else message.chat.id
-        )
-        if time.time() - flood_control.get(uid, 0) < FLOOD_LIMIT:
+        # 1. Определяем ID пользователя
+        if isinstance(message, types.CallbackQuery):
+            uid = message.from_user.id
+            msg_date = message.message.date  # Время отправки сообщения
+        else:
+            uid = message.chat.id
+            msg_date = message.date
+
+        now = time.time()
+
+        # --- ЗАЩИТА 1: Очистка очереди (Фильтр старых запросов) ---
+        # Если бот "задумался" и сообщение висит в очереди дольше 2 секунд — выкидываем его.
+        # Это решает проблему, когда вы натыкали 10 раз, и бот начал отвечать на все подряд с задержкой.
+        if now - msg_date > 2:
             return
-        flood_control[uid] = time.time()
+
+        # --- ЗАЩИТА 2: Сброс таймера (Наказание за спам) ---
+        # Логика: Если ты спамишь, таймер обновляется на СЕЙЧАС.
+        # То есть, чтобы нажать снова, нужно реально ПЕРЕСТАТЬ нажимать и подождать.
+        last_time = flood_control.get(uid, 0)
+
+        if now - last_time < FLOOD_LIMIT:
+            # Обновляем время даже при неудачной попытке!
+            # Человек сам себе продлевает блокировку каждым лишним кликом.
+            flood_control[uid] = now
+            return
+
+        # Если все ок — пропускаем и запоминаем время
+        flood_control[uid] = now
         return func(message)
 
     return wrapper
@@ -565,7 +586,7 @@ def admin_panel(message):
     kb.add("➕ Добавить товар", "✏️ Изменить товар")
     kb.add("📢 Рассылка", "🎁 Выдать товар")
     kb.add("💾 Бэкап БД", "📥 Импорт (CSV)")
-    kb.add("📥 Импорт (CSV)", "📊 Статистика")
+    kb.add("📊 Статистика")
     kb.add("🛠 Тех. пауза", "🔙 Меню")
     bot.send_message(message.chat.id, "Админка Гринча 😈", reply_markup=kb)
 
@@ -592,70 +613,176 @@ def adm_add(m):
     bot.send_message(m.chat.id, "Куда?", reply_markup=kb)
 
 
+# Вспомогательная клавиатура "Назад"
+def get_back_kb():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    kb.add("🔙 Назад")
+    return kb
+
+
 @bot.callback_query_handler(func=lambda c: c.data.startswith("aadd_s_"))
 def aadd_step1(c):
-    admin_state[c.from_user.id] = {"sid": c.data.split("_")[2]}
-    msg = bot.send_message(c.message.chat.id, "Название товара?")
+    # Начало: сохраняем ID магазина
+    sid = c.data.split("_")[2]
+    admin_state[c.from_user.id] = {"sid": sid}
+
+    # Спрашиваем Название
+    msg = bot.send_message(
+        c.message.chat.id, "1️⃣ Введите Название товара:", reply_markup=get_back_kb()
+    )
     bot.register_next_step_handler(msg, aadd_step2)
 
 
 def aadd_step2(m):
+    # Если нажали Назад -> Выход в меню
+    if m.text == "🔙 Назад":
+        return admin_panel(m)
+
     admin_state[m.from_user.id]["name"] = m.text
-    msg = bot.send_message(m.chat.id, "Цена (USD)?")
+    msg = bot.send_message(
+        m.chat.id, "2️⃣ Введите Цену (в USD, только число):", reply_markup=get_back_kb()
+    )
     bot.register_next_step_handler(msg, aadd_step3)
 
 
 def aadd_step3(m):
+    uid = m.from_user.id
+    # Если нажали Назад -> Возвращаемся к вводу Имени
+    if m.text == "🔙 Назад":
+        msg = bot.send_message(
+            m.chat.id, "1️⃣ Введите Название товара:", reply_markup=get_back_kb()
+        )
+        bot.register_next_step_handler(msg, aadd_step2)
+        return
+
     try:
-        admin_state[m.from_user.id]["price"] = float(m.text.replace(",", "."))
-        msg = bot.send_message(m.chat.id, "Район/Адрес (виден всем):")
+        admin_state[uid]["price"] = float(m.text.replace(",", "."))
+        msg = bot.send_message(
+            m.chat.id, "3️⃣ Введите Район/Адрес (виден всем):", reply_markup=get_back_kb()
+        )
         bot.register_next_step_handler(msg, aadd_step4)
     except:
-        bot.send_message(m.chat.id, "Ошибка числа.")
+        msg = bot.send_message(
+            m.chat.id,
+            "❌ Ошибка! Нужно ввести число (например 10.5). Попробуй еще раз:",
+            reply_markup=get_back_kb(),
+        )
+        bot.register_next_step_handler(m, aadd_step3)
 
 
 def aadd_step4(m):
+    # Если нажали Назад -> Возвращаемся к вводу Цены
+    if m.text == "🔙 Назад":
+        msg = bot.send_message(
+            m.chat.id, "2️⃣ Введите Цену (в USD):", reply_markup=get_back_kb()
+        )
+        bot.register_next_step_handler(msg, aadd_step3)
+        return
+
     admin_state[m.from_user.id]["addr"] = m.text
-    msg = bot.send_message(m.chat.id, "Секретное описание/Клад:")
+    msg = bot.send_message(
+        m.chat.id,
+        "4️⃣ Введите Секретное описание (Товар/Клад):",
+        reply_markup=get_back_kb(),
+    )
     bot.register_next_step_handler(msg, aadd_step5)
 
 
 def aadd_step5(m):
+    # Если нажали Назад -> Возвращаемся к вводу Адреса
+    if m.text == "🔙 Назад":
+        msg = bot.send_message(
+            m.chat.id, "3️⃣ Введите Район/Адрес:", reply_markup=get_back_kb()
+        )
+        bot.register_next_step_handler(msg, aadd_step4)
+        return
+
     admin_state[m.from_user.id]["desc"] = m.text
     admin_state[m.from_user.id]["photos"] = []
-    msg = bot.send_message(m.chat.id, "5️⃣ Отправьте **Первое фото**:")
+
+    # Для фото клавиатура немного другая
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    kb.row("✅ Готово, сохранить", "🔙 Назад")
+
+    msg = bot.send_message(
+        m.chat.id,
+        "5️⃣ Отправьте **Фото товара** (по одному):",
+        reply_markup=kb,
+        parse_mode="Markdown",
+    )
     bot.register_next_step_handler(msg, aadd_photo_loop)
 
 
 def aadd_photo_loop(m):
     uid = m.from_user.id
+
+    # Логика кнопки НАЗАД на этапе фото
+    if m.text == "🔙 Назад":
+        # Если фото еще не добавляли - возвращаемся к описанию
+        if not admin_state[uid]["photos"]:
+            msg = bot.send_message(
+                m.chat.id, "4️⃣ Введите Секретное описание:", reply_markup=get_back_kb()
+            )
+            bot.register_next_step_handler(msg, aadd_step5)
+        else:
+            # Если фото уже были, очищаем их и просим заново
+            admin_state[uid]["photos"] = []
+            kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+            kb.row("✅ Готово, сохранить", "🔙 Назад")
+            msg = bot.send_message(
+                m.chat.id,
+                "🗑 Фото сброшены. Отправьте фото заново или нажмите Назад еще раз для шага назад:",
+                reply_markup=kb,
+            )
+            bot.register_next_step_handler(msg, aadd_photo_loop)
+        return
+
     if m.content_type == "photo":
         admin_state[uid]["photos"].append(m.photo[-1].file_id)
         count = len(admin_state[uid]["photos"])
+
         kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-        kb.add("✅ Готово, сохранить")
+        kb.row("✅ Готово, сохранить", "🔙 Назад")
+
         msg = bot.send_message(
-            m.chat.id, f"📸 Фото: {count}. Шли еще или жми Готово:", reply_markup=kb
+            m.chat.id,
+            f"📸 Принято фото #{count}. Шли еще или жми Готово:",
+            reply_markup=kb,
         )
         bot.register_next_step_handler(msg, aadd_photo_loop)
         return
+
     elif m.text == "✅ Готово, сохранить":
         if not admin_state[uid]["photos"]:
-            msg = bot.send_message(m.chat.id, "Нужно хоть одно фото!")
+            kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+            kb.row("✅ Готово, сохранить", "🔙 Назад")
+            msg = bot.send_message(
+                m.chat.id, "⚠️ Нужно добавить хотя бы одно фото!", reply_markup=kb
+            )
             bot.register_next_step_handler(msg, aadd_photo_loop)
             return
         aadd_finish(m)
     else:
-        bot.send_message(m.chat.id, "Жду фото или кнопку.")
+        msg = bot.send_message(m.chat.id, "Я жду картинку или нажатие кнопки.")
         bot.register_next_step_handler(m, aadd_photo_loop)
 
 
 def aadd_finish(m):
     d = admin_state[m.from_user.id]
     photos_str = ",".join(d["photos"])
-    insert_product(d["sid"], d["name"], d["price"], d["desc"], photos_str, d["addr"])
-    kb = types.ReplyKeyboardRemove()
-    bot.send_message(m.chat.id, "✅ Товар добавлен!", reply_markup=kb)
+    # Проверка на наличие ключей на всякий случай
+    try:
+        insert_product(
+            d["sid"], d["name"], d["price"], d["desc"], photos_str, d["addr"]
+        )
+        bot.send_message(
+            m.chat.id,
+            "✅ Товар успешно добавлен!",
+            reply_markup=types.ReplyKeyboardRemove(),
+        )
+    except Exception as e:
+        bot.send_message(m.chat.id, f"❌ Ошибка при сохранении: {e}")
+
     admin_panel(m)
 
 
@@ -759,15 +886,23 @@ def adm_del_list(c):
 
         kb = types.InlineKeyboardMarkup()
         for p in prods:
-            note = p.get("admin_note", "")
-            note_str = f" | {note}" if note else ""
-            # Добавляем кнопку для каждого товара
+            # --- НАЧАЛО ИЗМЕНЕНИЙ ---
+            # 1. Берем адрес. Если его нет в базе, пишем пустую строку
+            addr = p.get("address", "")
+            # 2. Обрезаем адрес, если он длиннее 10 букв (чтобы кнопка не была гигантской)
+            short_addr = addr[:10] + ".." if len(addr) > 10 else addr
+
+            # 3. Формируем текст кнопки: Название | Район | #ID
+            # Пример: ❌ iPhone 15 | 📍Центр.. | #145
+            btn_text = f"❌ {p['name']} | 📍{short_addr} | #{p['product_id']}"
+
             kb.add(
                 types.InlineKeyboardButton(
-                    f"❌ {p['name']}{note_str} ({p['price_usd']}$)",
+                    btn_text,
                     callback_data=f"adel_do_{p['product_id']}",
                 )
             )
+            # --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
         # Кнопка назад к категориям удаления
         kb.add(
@@ -775,7 +910,7 @@ def adm_del_list(c):
         )
 
         bot.edit_message_text(
-            "Выберите товар для удаления:",
+            "Выберите товар для удаления (В кнопках: Имя | Район | ID):",
             c.message.chat.id,
             c.message.message_id,
             reply_markup=kb,
@@ -810,20 +945,41 @@ def edit_start(m):
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("edit_s_"))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("edit_s_"))
 def edit_list_prods(c):
     sid = c.data.split("_")[2]
     prods = get_products_by_store(sid)
+
+    if not prods:
+        return bot.answer_callback_query(c.id, "Категория пуста!", show_alert=True)
+
     kb = types.InlineKeyboardMarkup()
     for p in prods:
-        note = p.get("admin_note", "")
-        note_str = f" | {note}" if note else ""
+        # --- НАЧАЛО ИЗМЕНЕНИЙ ---
+        # То же самое: берем адрес и ID
+        addr = p.get("address", "")
+        short_addr = addr[:10] + ".." if len(addr) > 10 else addr
+
+        # Текст кнопки: ✏️ Имя | Район | #ID
+        btn_text = f"✏️ {p['name']} | 📍{short_addr} | #{p['product_id']}"
+
         kb.add(
             types.InlineKeyboardButton(
-                f"{p['name']}{note_str}", callback_data=f"edit_p_{p['product_id']}"
+                btn_text, callback_data=f"edit_p_{p['product_id']}"
             )
         )
+        # --- КОНЕЦ ИЗМЕНЕНИЙ ---
+
+    # Добавляем кнопку назад в меню категорий (опционально, но удобно)
+    kb.add(
+        types.InlineKeyboardButton("🔙 Назад к категориям", callback_data="cmd_start")
+    )  # Или верните в edit_start
+
     bot.edit_message_text(
-        "Товар?", c.message.chat.id, c.message.message_id, reply_markup=kb
+        "Какой товар изменить? (В кнопках: Имя | Район | ID)",
+        c.message.chat.id,
+        c.message.message_id,
+        reply_markup=kb,
     )
 
 
