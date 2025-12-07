@@ -1538,60 +1538,132 @@ def pipe_step_desc(m):
 
 # --- ОБРАБОТЧИК ФОТО ДЛЯ КОНВЕЙЕРА ---
 def pipe_process_buffer(chat_id, user_id):
-    """Срабатывает когда поток фото прекратился"""
+    """Срабатывает, когда поток фото прекратился. Выводит ПРОВЕРКУ."""
     if user_id not in admin_state or "photos" not in admin_state[user_id]:
         return
 
     data = admin_state[user_id]
     photos = data["photos"]
     target_count = data["count"]
+    received_count = len(photos)
 
     if not photos:
         return
 
-    # Проверка количества
-    if len(photos) != target_count:
-        bot.send_message(
-            chat_id,
-            f"⚠️ Внимание! Вы хотели {target_count} товаров, а скинули {len(photos)} фото.\n"
-            f"Я создам столько товаров, сколько есть фото ({len(photos)} шт).",
+    # Формируем текст проверки
+    warning = ""
+    if received_count != target_count:
+        warning = (
+            f"\n⚠️ <b>ВНИМАНИЕ:</b> Вы хотели {target_count}, а фото {received_count}!\n"
         )
 
+    msg = (
+        f"🔍 <b>ПРОВЕРКА КОНВЕЙЕРА</b>\n"
+        f"➖➖➖➖➖➖➖➖➖➖\n"
+        f"📦 <b>Товар:</b> {data['name']}\n"
+        f"💰 <b>Цена:</b> {data['price']} $\n"
+        f"📍 <b>Район:</b> {data['addr']}\n"
+        f"📝 <b>Описание:</b> {data['desc'][:20]}...\n"
+        f"➖➖➖➖➖➖➖➖➖➖\n"
+        f"📸 <b>Загружено фото:</b> {received_count} шт.\n"
+        f"{warning}\n"
+        f"Создать {received_count} товаров?"
+    )
+
+    # Кнопки подтверждения
+    kb = types.InlineKeyboardMarkup()
+    kb.add(
+        types.InlineKeyboardButton(
+            f"✅ Создать ({received_count} шт)", callback_data="pipe_confirm"
+        )
+    )
+    kb.add(types.InlineKeyboardButton("❌ Отмена / Сброс", callback_data="pipe_cancel"))
+
+    bot.send_message(chat_id, msg, reply_markup=kb, parse_mode="HTML")
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "pipe_confirm")
+def pipe_finalize_creation(c):
+    uid = c.from_user.id
+    chat_id = c.message.chat.id
+
+    if uid not in admin_state or "photos" not in admin_state[uid]:
+        return bot.answer_callback_query(c.id, "❌ Данные устарели. Начните заново.")
+
+    data = admin_state[uid]
+    photos = data["photos"]
+
+    bot.edit_message_text(
+        "⏳ <b>Создаю товары...</b>", chat_id, c.message.message_id, parse_mode="HTML"
+    )
+
     success = 0
-    # Цикл создания товаров
+    # Цикл создания товаров (теперь он тут)
     for file_id in photos:
         try:
             insert_product(
                 data["sid"],
                 data["name"],
                 data["price"],
-                data["desc"],  # Одинаковое описание
-                file_id,  # Уникальное фото
+                data["desc"],
+                file_id,
                 data["addr"],
             )
             success += 1
         except Exception as e:
             print(f"Error inserting pipe prod: {e}")
 
+    # Финальное сообщение
     bot.send_message(
         chat_id,
-        f"✅ <b>Конвейер завершен!</b>\n"
-        f"Создано товаров: {success} шт.\n"
-        f"Магазин: {data['name']} ({data['addr']})",
+        f"✅ <b>Конвейер успешно завершен!</b>\n\n"
+        f"🎉 Создано товаров: <b>{success}</b>\n"
+        f"📂 Категория: {data['name']}",
         parse_mode="HTML",
     )
 
-    # Очистка и выход
-    del admin_state[user_id]
-    if user_id in photo_timers:
-        del photo_timers[user_id]
+    # Очистка
+    if uid in admin_state:
+        del admin_state[uid]
+    if uid in photo_timers:
+        del photo_timers[uid]
 
-    # Возврат меню
-    m_fake = types.Message(
-        chat_id, None, None, None, None, None, None, None, None, None
+    # Возврат в меню
+    try:
+        # Небольшой хак, чтобы вызвать меню без message
+        m_fake = types.Message(
+            chat_id, None, None, None, None, None, None, None, None, None
+        )
+        m_fake.from_user = types.User(uid, False, "admin")
+        m_fake.chat = types.Chat(chat_id, "private")
+        admin_panel(m_fake)
+    except:
+        pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "pipe_cancel")
+def pipe_cancel_creation(c):
+    uid = c.from_user.id
+
+    # Очистка
+    if uid in admin_state:
+        del admin_state[uid]
+    if uid in photo_timers:
+        del photo_timers[uid]
+
+    bot.edit_message_text(
+        "❌ <b>Конвейер отменен.</b> Товары не созданы.",
+        c.message.chat.id,
+        c.message.message_id,
+        parse_mode="HTML",
     )
-    m_fake.from_user = types.User(user_id, False, "admin")
-    m_fake.chat = types.Chat(chat_id, "private")
+
+    # Возврат в меню
+    m_fake = types.Message(
+        c.message.chat.id, None, None, None, None, None, None, None, None, None
+    )
+    m_fake.from_user = types.User(uid, False, "admin")
+    m_fake.chat = types.Chat(c.message.chat.id, "private")
     admin_panel(m_fake)
 
 
