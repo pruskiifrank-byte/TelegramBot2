@@ -70,6 +70,41 @@ GRINCH_JOKES = [
 ]
 
 
+@bot.message_handler(
+    func=lambda m: MAINTENANCE_MODE and m.from_user.id not in ADMIN_IDS
+)
+def maintenance_message_block(message):
+    """
+    Перехватывает ЛЮБЫЕ текстовые сообщения и команды (/start),
+    если включен режим обслуживания.
+    """
+    text = (
+        "🚧 <b>МАГАЗИН ВРЕМЕННО ЗАКРЫТ</b> 🚧\n\n"
+        "Гринч проводит инвентаризацию подарков.\n"
+        "<i>Мы вернемся совсем скоро!</i> 🕐"
+    )
+    # Можно добавить картинку, если есть, или просто текст
+    bot.send_message(message.chat.id, text, parse_mode="HTML")
+
+
+@bot.callback_query_handler(
+    func=lambda c: MAINTENANCE_MODE and c.from_user.id not in ADMIN_IDS
+)
+def maintenance_callback_block(call):
+    """
+    Перехватывает ЛЮБЫЕ нажатия на кнопки.
+    Показывает всплывающее уведомление (alert), чтобы не спамить в чат.
+    """
+    try:
+        bot.answer_callback_query(
+            call.id,
+            "⛔️ Магазин на тех. обслуживании! Попробуйте позже.",
+            show_alert=True,
+        )
+    except:
+        pass
+
+
 def send_product_visuals(chat_id, file_path_str, caption):
     photos = file_path_str.split(",")
     if len(photos) == 1:
@@ -123,41 +158,6 @@ def anti_flood(func):
 
 
 # --- МЕНЮ ---
-@bot.message_handler(
-    func=lambda m: MAINTENANCE_MODE and m.from_user.id not in ADMIN_IDS
-)
-def maintenance_message_block(message):
-    """
-    Перехватывает ЛЮБЫЕ текстовые сообщения и команды (/start),
-    если включен режим обслуживания.
-    """
-    text = (
-        "🚧 <b>МАГАЗИН ВРЕМЕННО ЗАКРЫТ</b> 🚧\n\n"
-        "Гринч проводит инвентаризацию подарков.\n"
-        "<i>Мы вернемся совсем скоро!</i> 🕐"
-    )
-    # Можно добавить картинку, если есть, или просто текст
-    bot.send_message(message.chat.id, text, parse_mode="HTML")
-
-
-@bot.callback_query_handler(
-    func=lambda c: MAINTENANCE_MODE and c.from_user.id not in ADMIN_IDS
-)
-def maintenance_callback_block(call):
-    """
-    Перехватывает ЛЮБЫЕ нажатия на кнопки.
-    Показывает всплывающее уведомление (alert), чтобы не спамить в чат.
-    """
-    try:
-        bot.answer_callback_query(
-            call.id,
-            "⛔️ Магазин на тех. обслуживании! Попробуйте позже.",
-            show_alert=True,
-        )
-    except:
-        pass
-
-
 def main_menu():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     # Кнопки с вашими названиями
