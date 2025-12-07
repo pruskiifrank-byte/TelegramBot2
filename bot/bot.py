@@ -47,6 +47,9 @@ PRODUCTS_PER_PAGE = 5
 FLOOD_LIMIT = 0.7
 MAX_UNPAID_ORDERS = 1
 
+# Фотки
+photo_buffer = {}  # Здесь будем копить фото: {user_id: [id1, id2]}
+photo_timers = {}
 # Тех-пауза
 MAINTENANCE_MODE = False
 
@@ -586,8 +589,9 @@ def admin_panel(message):
     kb.add("➕ Добавить товар", "✏️ Изменить товар")
     kb.add("📢 Рассылка", "🎁 Выдать товар")
     kb.add("💾 Бэкап БД", "📥 Импорт (CSV)")
-    kb.add("📊 Статистика")
-    kb.add("🛠 Тех. пауза", "🔙 Меню")
+    kb.add("📊 Статистика", "📸 Генератор ID")
+    kb.add("🛠 Тех. пауза", "🏭 Конвейер")
+    kb.add("🔙 Меню")
     bot.send_message(message.chat.id, "Админка Гринча 😈", reply_markup=kb)
 
 
@@ -945,7 +949,6 @@ def edit_start(m):
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("edit_s_"))
-@bot.callback_query_handler(func=lambda c: c.data.startswith("edit_s_"))
 def edit_list_prods(c):
     sid = c.data.split("_")[2]
     prods = get_products_by_store(sid)
@@ -1212,16 +1215,111 @@ def handle_csv_import(message):
         bot.send_message(message.chat.id, f"❌ Ошибка: {e}")
 
 
-@bot.message_handler(content_types=["photo"])
-def get_photo_id_helper(message):
-    if message.from_user.id in ADMIN_IDS:
-        fid = message.photo[-1].file_id
-        try:
+# --- ГЕНЕРАТОР ID ДЛЯ EXCEL ---
+
+
+@bot.message_handler(func=lambda m: m.text == "📸 Генератор ID")
+def photo_gen_instruction(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    text = (
+        "📸 <b>Режим генерации ID для Excel</b>\n\n"
+        "1. Просто отправь мне фото (или выдели сразу 2-10 штук и отправь как альбом).\n"
+        "2. Я подожду пару секунд, соберу их в кучу.\n"
+        "3. Выдам тебе готовую строку кодов через запятую.\n\n"
+        "<i>Эту строку копируй и вставляй в колонку File_ID в Excel.</i>"
+    )
+    bot.send_message(message.chat.id, text, parse_mode="HTML")
+
+
+def process_photo_buffer(chat_id, user_id):
+    """Эта функция запускается через 1.5 сек после последнего фото"""
+    # Если буфер пуст - выходим
+    if user_id not in photo_buffer or not photo_buffer[user_id]:
+        return
+
+    # Берем список накопленных ID
+    file_ids = photo_buffer[user_id]
+    count = len(file_ids)
+
+    # 1. Формируем заголовок сообщения
+    msg = (
+        f"📦 <b>Пакет обработан!</b>\n"
+        f"Загружено фото: {count} шт.\n"
+        f"👇 <i>Нажимай на код, чтобы скопировать ID для конкретного товара:</i>\n\n"
+    )
+
+    # 2. Добавляем КАЖДОЕ фото отдельным блоком с номером
+    # enumerate(file_ids, 1) начинает нумерацию с 1
+    for i, fid in enumerate(file_ids, 1):
+        msg += f"🖼 <b>Фото №{i}</b>\n<code>{fid}</code>\n\n"
+
+    # 3. (Опционально) Добавляем общую строку в конце, вдруг пригодится для галереи
+    combined = ",".join(file_ids)
+    if count > 1:
+        msg += f"📚 <b>Весь пак (если надо 1 товар с {count} фото):</b>\n<code>{combined}</code>"
+
+    # Очищаем буфер
+    del photo_buffer[user_id]
+    if user_id in photo_timers:
+        del photo_timers[user_id]
+
+    # Отправляем
+    try:
+        # Telegram имеет лимит на длину сообщения.
+        # Если фоток очень много (больше 10-15), сообщение может не влезть.
+        # Поэтому на всякий случай разбиваем, если msg слишком длинный.
+        if len(msg) > 4000:
+            # Если слишком длинно - шлем кусками (упрощенно: по 1 фото)
             bot.send_message(
-                message.chat.id, f"🆔 Код фото:\n<code>{fid}</code>", parse_mode="HTML"
+                chat_id, "📦 <b>Пакет большой, шлю частями:</b>", parse_mode="HTML"
             )
-        except:
-            pass
+            for i, fid in enumerate(file_ids, 1):
+                bot.send_message(
+                    chat_id,
+                    f"🖼 <b>Фото №{i}</b>\n<code>{fid}</code>",
+                    parse_mode="HTML",
+                )
+        else:
+            bot.send_message(chat_id, msg, parse_mode="HTML")
+
+    except Exception as e:
+        bot.send_message(chat_id, f"Ошибка отправки: {e}")
+
+
+@bot.message_handler(content_types=["photo"])
+def universal_photo_handler(message):
+    uid = message.from_user.id
+    if uid not in ADMIN_IDS:
+        return
+
+    # 1. ПРОВЕРКА: Если мы в режиме КОНВЕЙЕРА (добавляем товары)
+    if uid in admin_state and admin_state[uid].get("waiting_photos"):
+        fid = message.photo[-1].file_id
+        admin_state[uid]["photos"].append(fid)
+
+        if uid in photo_timers:
+            photo_timers[uid].cancel()
+
+        t = threading.Timer(2.0, pipe_process_buffer, args=[message.chat.id, uid])
+        t.start()
+        photo_timers[uid] = t
+        return
+
+    # 2. ИНАЧЕ: Работает режим ГЕНЕРАТОРА ID (просто показывает коды)
+    # (Код из предыдущего ответа про process_photo_buffer)
+
+    fid = message.photo[-1].file_id
+    if uid not in photo_buffer:
+        photo_buffer[uid] = []
+    photo_buffer[uid].append(fid)
+
+    if uid in photo_timers:
+        photo_timers[uid].cancel()
+
+    t = threading.Timer(1.5, process_photo_buffer, args=[message.chat.id, uid])
+    t.start()
+    photo_timers[uid] = t
 
 
 # --- БЭКАП ---
@@ -1308,6 +1406,223 @@ def auto_backup_loop():
                     )
                 except Exception as e:
                     print(f"Backup send error: {e}")
+
+
+# ==========================================
+#          ЛОГИКА КОНВЕЙЕРА (PIPELINE)
+# ==========================================
+
+
+@bot.message_handler(func=lambda m: m.text == "🏭 Конвейер")
+def pipeline_start(m):
+    if m.from_user.id not in ADMIN_IDS:
+        return
+
+    # Очищаем состояние
+    admin_state[m.from_user.id] = {"mode": "pipeline", "photos": []}
+
+    msg = bot.send_message(
+        m.chat.id,
+        "🏭 <b>Режим Конвейера</b>\n\n"
+        "Мы создадим много одинаковых товаров, отличающихся ТОЛЬКО фото.\n"
+        "1️⃣ Введите количество товаров (число):",
+        reply_markup=get_back_kb(),
+        parse_mode="HTML",
+    )
+    bot.register_next_step_handler(msg, pipe_step_count)
+
+
+def pipe_step_count(m):
+    if m.text == "🔙 Назад":
+        return admin_panel(m)
+
+    try:
+        count = int(m.text)
+        admin_state[m.from_user.id]["count"] = count
+    except:
+        msg = bot.send_message(m.chat.id, "❌ Введите число (например: 10).")
+        return bot.register_next_step_handler(msg, pipe_step_count)
+
+    # Выбор магазина
+    stores = get_all_stores()
+    kb = types.InlineKeyboardMarkup()
+    for s in stores:
+        kb.add(
+            types.InlineKeyboardButton(
+                s["title"], callback_data=f"pipe_s_{s['store_id']}"
+            )
+        )
+
+    bot.send_message(m.chat.id, "2️⃣ Выберите категорию (Магазин):", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("pipe_s_"))
+def pipe_step_store(c):
+    sid = c.data.split("_")[2]
+    admin_state[c.from_user.id]["sid"] = sid
+
+    msg = bot.send_message(
+        c.message.chat.id, "3️⃣ Введите ОБЩЕЕ Название:", reply_markup=get_back_kb()
+    )
+    bot.register_next_step_handler(msg, pipe_step_name)
+
+
+def pipe_step_name(m):
+    if m.text == "🔙 Назад":
+        return admin_panel(m)
+    admin_state[m.from_user.id]["name"] = m.text
+
+    msg = bot.send_message(
+        m.chat.id, "4️⃣ Введите ОБЩУЮ Цену (число):", reply_markup=get_back_kb()
+    )
+    bot.register_next_step_handler(msg, pipe_step_price)
+
+
+def pipe_step_price(m):
+    if m.text == "🔙 Назад":
+        return admin_panel(m)
+    try:
+        price = float(m.text.replace(",", "."))
+        admin_state[m.from_user.id]["price"] = price
+    except:
+        msg = bot.send_message(m.chat.id, "❌ Нужно число. Попробуй еще раз:")
+        return bot.register_next_step_handler(msg, pipe_step_price)
+
+    msg = bot.send_message(
+        m.chat.id, "5️⃣ Введите ОБЩИЙ Район/Адрес:", reply_markup=get_back_kb()
+    )
+    bot.register_next_step_handler(msg, pipe_step_addr)
+
+
+def pipe_step_addr(m):
+    if m.text == "🔙 Назад":
+        return admin_panel(m)
+    admin_state[m.from_user.id]["addr"] = m.text
+
+    msg = bot.send_message(
+        m.chat.id,
+        "6️⃣ Введите ОБЩЕЕ Секретное описание (Клад):\n"
+        "<i>(Если у каждого клада свое описание - лучше используйте CSV импорт. "
+        "Здесь описание будет одинаковым для всех, разница только в фото).</i>",
+        reply_markup=get_back_kb(),
+        parse_mode="HTML",
+    )
+    bot.register_next_step_handler(msg, pipe_step_desc)
+
+
+def pipe_step_desc(m):
+    if m.text == "🔙 Назад":
+        return admin_panel(m)
+    uid = m.from_user.id
+    admin_state[uid]["desc"] = m.text
+
+    count = admin_state[uid]["count"]
+
+    # Инструкция по фото
+    bot.send_message(
+        m.chat.id,
+        f"🏁 <b>ФИНАЛ: Загрузка фото</b>\n\n"
+        f"Я жду от тебя <b>{count} фотографий</b>.\n"
+        f"Просто выдели их в галерее и отправь (можно альбомом).\n"
+        f"Я автоматически создам {count} товаров, прикрепив к каждому по 1 фото.",
+        reply_markup=get_back_kb(),  # Можно нажать назад если передумал
+        parse_mode="HTML",
+    )
+    # Переводим бота в режим ожидания фото для конвейера
+    admin_state[uid]["waiting_photos"] = True
+
+
+# --- ОБРАБОТЧИК ФОТО ДЛЯ КОНВЕЙЕРА ---
+def pipe_process_buffer(chat_id, user_id):
+    """Срабатывает когда поток фото прекратился"""
+    if user_id not in admin_state or "photos" not in admin_state[user_id]:
+        return
+
+    data = admin_state[user_id]
+    photos = data["photos"]
+    target_count = data["count"]
+
+    if not photos:
+        return
+
+    # Проверка количества
+    if len(photos) != target_count:
+        bot.send_message(
+            chat_id,
+            f"⚠️ Внимание! Вы хотели {target_count} товаров, а скинули {len(photos)} фото.\n"
+            f"Я создам столько товаров, сколько есть фото ({len(photos)} шт).",
+        )
+
+    success = 0
+    # Цикл создания товаров
+    for file_id in photos:
+        try:
+            insert_product(
+                data["sid"],
+                data["name"],
+                data["price"],
+                data["desc"],  # Одинаковое описание
+                file_id,  # Уникальное фото
+                data["addr"],
+            )
+            success += 1
+        except Exception as e:
+            print(f"Error inserting pipe prod: {e}")
+
+    bot.send_message(
+        chat_id,
+        f"✅ <b>Конвейер завершен!</b>\n"
+        f"Создано товаров: {success} шт.\n"
+        f"Магазин: {data['name']} ({data['addr']})",
+        parse_mode="HTML",
+    )
+
+    # Очистка и выход
+    del admin_state[user_id]
+    if user_id in photo_timers:
+        del photo_timers[user_id]
+
+    # Возврат меню
+    m_fake = types.Message(
+        chat_id, None, None, None, None, None, None, None, None, None
+    )
+    m_fake.from_user = types.User(user_id, False, "admin")
+    m_fake.chat = types.Chat(chat_id, "private")
+    admin_panel(m_fake)
+
+
+@bot.message_handler(content_types=["photo"])
+def handle_pipeline_photos(message):
+    uid = message.from_user.id
+    if uid not in ADMIN_IDS:
+        return
+
+    # Проверяем, в режиме ли мы конвейера
+    if uid in admin_state and admin_state[uid].get("waiting_photos"):
+
+        # Сохраняем фото
+        fid = message.photo[-1].file_id
+        admin_state[uid]["photos"].append(fid)
+
+        # Логика таймера (ждем пока перестанут сыпаться фото)
+        if uid in photo_timers:
+            photo_timers[uid].cancel()
+
+        t = threading.Timer(2.0, pipe_process_buffer, args=[message.chat.id, uid])
+        t.start()
+        photo_timers[uid] = t
+
+    else:
+        # Если не конвейер - отдаем управление другим функциям (генератору ID и т.д.)
+        # Вам нужно убедиться, что handle_photos_smart (из прошлого ответа) не перехватывает это
+        # Лучше всего объединить их или проверять state.
+
+        # Если у вас стоит handle_photos_smart, добавьте туда проверку:
+        # if uid in admin_state and admin_state[uid].get("waiting_photos"): return
+
+        # А пока просто вызовем старую логику показа ID если она нужна
+        # get_photo_id_helper(message)
+        pass
 
 
 # ЗАПУСК ПОТОКА БЭКАПА (Вставьте эту строку один раз, чтобы она сработала при старте)
