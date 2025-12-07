@@ -55,18 +55,52 @@ photo_timers = {}
 MAINTENANCE_FILE = "maintenance.state"
 
 
+def init_settings_table():
+    """Создает таблицу настроек, если её нет"""
+    query = """
+    CREATE TABLE IF NOT EXISTS bot_settings (
+        setting_key VARCHAR(50) PRIMARY KEY,
+        setting_value VARCHAR(255)
+    );
+    """
+    execute_query(query)
+
+
 def load_maintenance_mode():
-    if os.path.exists(MAINTENANCE_FILE):
-        with open(MAINTENANCE_FILE, "r") as f:
-            return f.read().strip() == "1"
-    return False
+    """Читает состояние из БД при запуске"""
+    try:
+        # Проверяем таблицу (на всякий случай, если первый запуск)
+        init_settings_table()
+
+        # Читаем настройку
+        query = "SELECT setting_value FROM bot_settings WHERE setting_key = 'maintenance_mode';"
+        res = execute_query(query, fetch=True)
+
+        if res:
+            return res[0][0] == "1"
+        return False
+    except Exception as e:
+        print(f"Ошибка чтения настроек из БД: {e}")
+        return False
 
 
 def save_maintenance_mode(is_enabled):
-    with open(MAINTENANCE_FILE, "w") as f:
-        f.write("1" if is_enabled else "0")
+    """Записывает состояние в БД"""
+    val = "1" if is_enabled else "0"
+    try:
+        # Используем Upsert (Вставить, а если есть - Обновить)
+        query = """
+        INSERT INTO bot_settings (setting_key, setting_value) 
+        VALUES ('maintenance_mode', %s) 
+        ON CONFLICT (setting_key) DO UPDATE 
+        SET setting_value = EXCLUDED.setting_value;
+        """
+        execute_query(query, (val,))
+    except Exception as e:
+        print(f"Ошибка записи настроек в БД: {e}")
 
 
+# Инициализируем переменную при старте
 MAINTENANCE_MODE = load_maintenance_mode()
 
 # Ссыль на картинку с заказа
