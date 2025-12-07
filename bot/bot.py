@@ -51,7 +51,22 @@ MAX_UNPAID_ORDERS = 1
 photo_buffer = {}  # Здесь будем копить фото: {user_id: [id1, id2]}
 photo_timers = {}
 # Тех-пауза
-MAINTENANCE_MODE = False
+MAINTENANCE_FILE = "maintenance.state"
+
+
+def load_maintenance_mode():
+    if os.path.exists(MAINTENANCE_FILE):
+        with open(MAINTENANCE_FILE, "r") as f:
+            return f.read().strip() == "1"
+    return False
+
+
+def save_maintenance_mode(is_enabled):
+    with open(MAINTENANCE_FILE, "w") as f:
+        f.write("1" if is_enabled else "0")
+
+
+MAINTENANCE_MODE = load_maintenance_mode()
 
 # Ссыль на картинку с заказа
 ORDER_IMG = "AgACAgUAAxkBAAIR3GkwvRcNA3SAoqDSRicOyT0bFeAlAAJuC2sbRHuIVcqZZBo5CZGgAQADAgADeQADNgQ"
@@ -238,7 +253,10 @@ def maintenance_filter(call_or_message):
 @bot.message_handler(func=lambda m: m.text == "🎒 Забрать подарки")
 @anti_flood
 def handle_buy(message):
-    # ИСПРАВЛЕНО: bot.send_message вместо bot.send.message
+
+    if MAINTENANCE_MODE and message.from_user.id not in ADMIN_IDS:
+        return bot.send_message(message.chat.id, "⛔️ Магазин закрыт на тех. обслуживание!")
+    
     bot.send_message(
         message.chat.id,
         "Эти товары почти так же хороши, как украденные подарки.\n Хватай, пока не передумал!",
@@ -260,6 +278,10 @@ def handle_buy(message):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("store_"))
 def handle_store(call):
+
+    if MAINTENANCE_MODE and call.from_user.id not in ADMIN_IDS:
+        return bot.answer_callback_query(call.id, "⛔️ Магазин на паузе!", show_alert=True)
+    
     try:
         bot.answer_callback_query(call.id)
     except:
@@ -388,6 +410,12 @@ def handle_district_selection(call):
 # --- СОЗДАНИЕ ЗАКАЗА ---
 @bot.callback_query_handler(func=lambda c: c.data.startswith("prod_"))
 def handle_prod_payment(call):
+    if MAINTENANCE_MODE and call.from_user.id not in ADMIN_IDS:
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except: 
+            pass
+        return bot.answer_callback_query(call.id, "⛔️ ОШИБКА: Магазин закрыт на тех. работы!", show_alert=True) 
     try:
         bot.answer_callback_query(call.id)
     except:
@@ -1842,6 +1870,7 @@ def maintenance_ask(c):
 def maintenance_on(c):
     global MAINTENANCE_MODE
     MAINTENANCE_MODE = True
+    save_maintenance_mode(True)
 
     # --- НОВАЯ ЛОГИКА: АВТО-ОТМЕНА ЗАКАЗОВ ---
     canceled_count = 0
@@ -1881,7 +1910,7 @@ def maintenance_on(c):
         bot.send_message(c.message.chat.id, f"⚠️ Ошибка при отмене заказов: {e}")
     # -------------------------------------------
 
-    bot.answer_callback_query(c.id, "Магазин закрыт!")
+    bot.answer_callback_query(c.id, "Магазин закрыт (статус сохранен)!")
 
     status_msg = (
         "🔴 <b>ТЕХ. ПАУЗА ВКЛЮЧЕНА.</b>\n"
@@ -1903,6 +1932,8 @@ def maintenance_on(c):
 def maintenance_off(c):
     global MAINTENANCE_MODE
     MAINTENANCE_MODE = False
+    save_maintenance_mode(False)  # <--- СОХРАНЯЕМ В ФАЙЛ
+
     bot.answer_callback_query(c.id, "Магазин открыт!")
     bot.edit_message_text(
         "🟢 <b>ТЕХ. ПАУЗА ВЫКЛЮЧЕНА.</b>\nМагазин снова работает.",
