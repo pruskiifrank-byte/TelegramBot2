@@ -7,6 +7,7 @@ import threading
 import math
 import csv
 import io
+import os
 import zipfile
 import random
 from datetime import datetime
@@ -255,8 +256,10 @@ def maintenance_filter(call_or_message):
 def handle_buy(message):
 
     if MAINTENANCE_MODE and message.from_user.id not in ADMIN_IDS:
-        return bot.send_message(message.chat.id, "⛔️ Магазин закрыт на тех. обслуживание!")
-    
+        return bot.send_message(
+            message.chat.id, "⛔️ Магазин закрыт на тех. обслуживание!"
+        )
+
     bot.send_message(
         message.chat.id,
         "Эти товары почти так же хороши, как украденные подарки.\n Хватай, пока не передумал!",
@@ -280,8 +283,10 @@ def handle_buy(message):
 def handle_store(call):
 
     if MAINTENANCE_MODE and call.from_user.id not in ADMIN_IDS:
-        return bot.answer_callback_query(call.id, "⛔️ Магазин на паузе!", show_alert=True)
-    
+        return bot.answer_callback_query(
+            call.id, "⛔️ Магазин на паузе!", show_alert=True
+        )
+
     try:
         bot.answer_callback_query(call.id)
     except:
@@ -413,9 +418,11 @@ def handle_prod_payment(call):
     if MAINTENANCE_MODE and call.from_user.id not in ADMIN_IDS:
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
-        except: 
+        except:
             pass
-        return bot.answer_callback_query(call.id, "⛔️ ОШИБКА: Магазин закрыт на тех. работы!", show_alert=True) 
+        return bot.answer_callback_query(
+            call.id, "⛔️ ОШИБКА: Магазин закрыт на тех. работы!", show_alert=True
+        )
     try:
         bot.answer_callback_query(call.id)
     except:
