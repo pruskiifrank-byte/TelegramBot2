@@ -559,29 +559,77 @@ def cancel_order_handler(call):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("check_"))
 def check_pay(call):
     oid = call.data.split("_")[1]
+
+    # --- ЗАЩИТА №1: Быстрая проверка ---
+    # Если заказ уже оплачен, даже не лезем в API платежки
     order = get_order(oid)
     if not order:
-        return bot.answer_callback_query(call.id, "Не найден… как и твоя удача.")
-    if order["status"] == "paid":
-        return bot.answer_callback_query(call.id, "Уже оплачен, не жми зря.")
+        return bot.answer_callback_query(call.id, "Заказ не найден 🤷‍♂️")
 
-    bot.answer_callback_query(call.id, "Проверяю...")
+    if order["status"] == "paid":
+        try:
+            bot.edit_message_reply_markup(
+                call.message.chat.id, call.message.message_id, reply_markup=None
+            )
+        except:
+            pass
+        return bot.answer_callback_query(
+            call.id, "✅ Этот заказ уже был выдан!", show_alert=True
+        )
+
+    bot.answer_callback_query(call.id, "Связываюсь с банком... ⏳")
+
+    # Проверяем оплату через API
     if verify_payment_via_api(order.get("oxapay_track_id")):
+
+        # --- ЗАЩИТА №2: Финальная блокировка ---
+        # Перед тем как выдать товар, проверяем базу ЕЩЕ РАЗ.
+        # Вдруг за эту секунду пользователь нажал кнопку второй раз?
+        fresh_order_check = get_order(oid)
+        if fresh_order_check["status"] == "paid":
+            return bot.send_message(
+                call.from_user.id, "⚠️ Вы уже получили этот товар (двойное нажатие)."
+            )
+
+        # 1. СНАЧАЛА обновляем статус в базе (Закрываем ворота)
+        update_order(oid, status="paid", delivery_status="delivered")
+        mark_product_as_sold(order["product_id"])
+
+        # 2. ПОЛУЧАЕМ данные товара
         details = get_product_details_by_id(order["product_id"])
-        msg = f"✅ <b>Оплата прошла, ну хоть что-то </b>\n📦 {details['product_name']}\n📍 {details['delivery_text']}\n\n Пользуйся, раз уж купил."
+
+        # (Доп. защита: если товар вдруг удалили пока шла оплата)
+        if not details:
+            return bot.send_message(
+                call.from_user.id,
+                "🆘 Оплата прошла, но товар не найден! Срочно пишите админу.",
+            )
+
+        # 3. И только теперь ОТПРАВЛЯЕМ фото
+        msg = (
+            f"✅ <b>Оплата получена!</b>\n"
+            f"📦 {details['product_name']}\n"
+            f"📍 {details['delivery_text']}\n\n"
+            f"<i>Спасибо за покупку! Заглядывайте еще.</i> 😈"
+        )
         try:
             send_product_visuals(call.from_user.id, details["file_path"], msg)
-            update_order(oid, status="paid", delivery_status="delivered")
-            mark_product_as_sold(order["product_id"])
+
+            # Обновляем сообщение с кнопкой, убираем кнопку "Проверить"
             bot.edit_message_text(
-                f"✅ Заказ {oid} выдан. Хватай, пока не передумал.",
+                f"✅ Заказ {oid} успешно выдан.",
                 call.message.chat.id,
                 call.message.message_id,
             )
         except Exception as e:
-            bot.send_message(call.from_user.id, f"🤮 Что-то пошло не так: {e}")
+            bot.send_message(
+                call.from_user.id,
+                f"😱 Оплата прошла, но я не смог отправить фото: {e}\nПиши админу!",
+            )
     else:
-        bot.send_message(call.from_user.id, "❌ Оплаты нет. И Гринчу это не нравится.")
+        bot.send_message(
+            call.from_user.id, "❌ Оплаты пока нет. Попробуйте через минуту."
+        )
 
 
 # --- АДМИНКА ---
@@ -1759,9 +1807,57 @@ def maintenance_ask(c):
 def maintenance_on(c):
     global MAINTENANCE_MODE
     MAINTENANCE_MODE = True
+
+    # --- НОВАЯ ЛОГИКА: АВТО-ОТМЕНА ЗАКАЗОВ ---
+    canceled_count = 0
+    try:
+        # 1. Сначала узнаем, КОГО мы будем отменять (чтобы отправить им сообщение)
+        # Нам нужны ID заказа и ID пользователя для всех, кто ждет оплату
+        pending_orders = execute_query(
+            "SELECT order_id, user_id FROM orders WHERE status = 'waiting_payment';",
+            fetch=True,
+        )
+
+        # 2. Массово меняем статус в базе данных на 'cancelled'
+        # Делаем это ДО рассылки, чтобы если кто-то нажмет "Проверить оплату", ему уже отказало
+        execute_query(
+            "UPDATE orders SET status = 'cancelled' WHERE status = 'waiting_payment';"
+        )
+
+        # 3. Уведомляем пользователей (если такие есть)
+        if pending_orders:
+            for row in pending_orders:
+                oid, uid = row
+                try:
+                    bot.send_message(
+                        uid,
+                        f"⛔️ <b>Ваш заказ {oid} был автоматически отменен.</b>\n\n"
+                        f"Магазин уходит на Техническое Обслуживание.\n"
+                        f"⚠️ <b>Пожалуйста, НЕ оплачивайте этот заказ!</b>\n"
+                        f"Ждем вас, когда работы закончатся.",
+                        parse_mode="HTML",
+                    )
+                    canceled_count += 1
+                except:
+                    pass  # Если пользователь заблокировал бота, просто пропускаем
+
+    except Exception as e:
+        # Если вдруг ошибка в базе, сообщаем админу, но паузу все равно включаем
+        bot.send_message(c.message.chat.id, f"⚠️ Ошибка при отмене заказов: {e}")
+    # -------------------------------------------
+
     bot.answer_callback_query(c.id, "Магазин закрыт!")
+
+    status_msg = (
+        "🔴 <b>ТЕХ. ПАУЗА ВКЛЮЧЕНА.</b>\n"
+        "Пользователи видят заглушку. Админы могут работать.\n"
+    )
+
+    if canceled_count > 0:
+        status_msg += f"\n🗑 <b>Отменено неоплаченных заказов: {canceled_count} шт.</b>"
+
     bot.edit_message_text(
-        "🔴 <b>ТЕХ. ПАУЗА ВКЛЮЧЕНА.</b>\n Пользователи видят заглушку. Админы могут работать.",
+        status_msg,
         c.message.chat.id,
         c.message.message_id,
         parse_mode="HTML",
