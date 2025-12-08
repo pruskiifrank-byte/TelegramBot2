@@ -142,11 +142,19 @@ def get_districts_for_product(product_name):
 
 def get_fresh_product_id(name, address):
     """
-    Ищет любой свободный ID товара с таким именем и районом.
+    Ищет свободный товар.
+    Условие: Товар не продан И на него нет заказа, созданного менее 40 минут назад.
     """
     query = """
-    SELECT product_id FROM products 
-    WHERE name = %s AND address = %s AND is_sold = FALSE 
+    SELECT p.product_id 
+    FROM products p
+    LEFT JOIN orders o ON p.product_id = o.product_id 
+        AND o.status = 'waiting_payment' 
+        AND o.created_at > NOW() - INTERVAL '40 minutes'
+    WHERE p.name = %s 
+      AND p.address = %s 
+      AND p.is_sold = FALSE 
+      AND o.order_id IS NULL -- Это гарантирует, что активной брони нет
     LIMIT 1;
     """
     res = execute_query(query, (name, address), fetch=True)
