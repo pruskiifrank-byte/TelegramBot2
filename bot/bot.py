@@ -63,7 +63,7 @@ CACHE_TTL = 60  # Обновлять кеш из БД раз в 60 секунд 
 
 
 def init_settings_table():
-    """Создает таблицу настроек при старте"""
+    """Создает таблицу при старте, если её нет"""
     execute_query(
         """
         CREATE TABLE IF NOT EXISTS bot_settings (
@@ -74,7 +74,7 @@ def init_settings_table():
     )
 
 
-# Инициализируем таблицу сразу при импорте
+# Инициализация таблицы (безопасная)
 try:
     init_settings_table()
 except Exception as e:
@@ -82,41 +82,37 @@ except Exception as e:
 
 
 def is_maintenance_active():
-    """
-    Главная функция проверки.
-    Возвращает True (пауза) или False (работаем).
-    Использует кеш, но обновляет его из БД.
-    """
+    """Читает статус (Сначала кеш, потом БД)"""
     global _maintenance_cache
 
+    # Если кеш свежий — верим ему
     if time.time() - _maintenance_cache["last_updated"] < CACHE_TTL:
         return _maintenance_cache["value"]
 
     try:
-        # ИСПРАВЛЕНО: Ключ в базе называется 'maintenance_mode', а не как функция
+        # Читаем из БД
         res = execute_query(
             "SELECT setting_value FROM bot_settings WHERE setting_key = 'maintenance_mode';",
             fetch=True,
         )
         status = res and res[0][0] == "1"
 
+        # Обновляем кеш
         _maintenance_cache = {"value": status, "last_updated": time.time()}
         return status
     except Exception as e:
-        print(f"Ошибка чтения статуса паузы: {e}")
+        print(f"Error reading maintenance status: {e}")
         return _maintenance_cache["value"]
 
 
 def set_maintenance_mode(enable: bool):
-    """Включает/выключает паузу и пишет в БД + Кеш"""
+    """Пишет статус в БД и обновляет кеш"""
     global _maintenance_cache
     val = "1" if enable else "0"
 
-    # 1. Сначала обновляем кеш (чтобы бот отреагировал мгновенно)
+    # Мгновенно обновляем кеш (чтобы бот не тупил)
     _maintenance_cache = {"value": enable, "last_updated": time.time() + 999999}
-    # (Ставим время в будущее, чтобы кеш не протух сразу)
 
-    # 2. Пишем в БД (чтобы сохранилось после перезагрузки)
     try:
         query = """
         INSERT INTO bot_settings (setting_key, setting_value) 
@@ -126,7 +122,7 @@ def set_maintenance_mode(enable: bool):
         """
         execute_query(query, (val,))
     except Exception as e:
-        print(f"Критическая ошибка сохранения статуса: {e}")
+        print(f"Critical error saving status: {e}")
 
 
 # Ссыль на картинку с заказа
@@ -1997,20 +1993,16 @@ def maintenance_ask(c):
 
 @bot.callback_query_handler(func=lambda c: c.data == "maint_on")
 def maintenance_on(c):
-    # 1. Включаем режим через правильную функцию
+    # 1. Включаем режим (пишем в БД)
     set_maintenance_mode(True)
 
-    # А глобальную переменную мы здесь НЕ трогаем, так как is_maintenance_active()
-    # сама прочитает новое значение из кеша/БД при следующем вызове.
-
-    # --- ЛОГИКА АВТО-ОТМЕНЫ ЗАКАЗОВ ---
+    # 2. Логика отмены заказов
     canceled_count = 0
     try:
         pending_orders = execute_query(
             "SELECT order_id, user_id FROM orders WHERE status = 'waiting_payment';",
             fetch=True,
         )
-
         execute_query(
             "UPDATE orders SET status = 'cancelled' WHERE status = 'waiting_payment';"
         )
@@ -2021,40 +2013,27 @@ def maintenance_on(c):
                 try:
                     bot.send_message(
                         uid,
-                        f"⛔️ <b>Ваш заказ {oid} был автоматически отменен.</b>\n\n"
-                        f"Магазин уходит на Техническое Обслуживание.\n"
-                        f"⚠️ <b>Пожалуйста, НЕ оплачивайте этот заказ!</b>",
+                        f"⛔️ Заказ {oid} отменен из-за тех. работ.",
                         parse_mode="HTML",
                     )
                     canceled_count += 1
                 except:
                     pass
-
-    except Exception as e:
-        bot.send_message(c.message.chat.id, f"⚠️ Ошибка при отмене заказов: {e}")
-    # -------------------------------------------
+    except:
+        pass
 
     bot.answer_callback_query(c.id, "Магазин закрыт!")
-
-    status_msg = (
-        "🔴 <b>ТЕХ. ПАУЗА ВКЛЮЧЕНА.</b>\n"
-        "Пользователи видят заглушку. Админы могут работать.\n"
-    )
-
+    msg = "🔴 <b>ТЕХ. ПАУЗА ВКЛЮЧЕНА.</b>"
     if canceled_count > 0:
-        status_msg += f"\n🗑 <b>Отменено неоплаченных заказов: {canceled_count} шт.</b>"
-
+        msg += f"\n🗑 Отменено заказов: {canceled_count}"
     bot.edit_message_text(
-        status_msg,
-        c.message.chat.id,
-        c.message.message_id,
-        parse_mode="HTML",
+        msg, c.message.chat.id, c.message.message_id, parse_mode="HTML"
     )
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "maint_off")
 def maintenance_off(c):
-    # 1. Выключаем режим через правильную функцию
+    # 1. Выключаем режим (пишем в БД)
     set_maintenance_mode(False)
 
     bot.answer_callback_query(c.id, "Магазин открыт!")
@@ -2146,8 +2125,21 @@ def auto_cancel_expired_loop():
             print(f"Ошибка в авто-отмене: {e}")
 
 
-# ЗАПУСК ПОТОКОВ (Вставьте это в самом конце файла bot.py)
-# Запускаем бэкап
-threading.Thread(target=auto_backup_loop, daemon=True).start()
-# Запускаем уборщика просроченных заказов
-threading.Thread(target=auto_cancel_expired_loop, daemon=True).start()
+def start_background_tasks():
+    """Запускает бэкапы и очистку. Безопасно вызывать из server.py"""
+    try:
+        # Проверяем, не запущены ли уже потоки (защита от дублей)
+        if threading.active_count() < 3: 
+            threading.Thread(target=auto_backup_loop, daemon=True).start()
+            # threading.Thread(target=auto_cancel_expired_loop, daemon=True).start() # Если есть эта функция
+            print("✅ Фоновые задачи запущены.")
+    except Exception as e:
+        print(f"Ошибка запуска задач: {e}")
+
+# --- ГЛАВНЫЙ БЛОК ЗАПУСКА ---
+if __name__ == "__main__":
+    # Этот код сработает ТОЛЬКО если вы запускаете файл вручную (python bot.py)
+    # На Render (через server.py) этот код НЕ выполнится, что нам и нужно.
+    print("🤖 Бот запущен локально (Polling)...")
+    start_background_tasks()
+    bot.infinity_polling()
