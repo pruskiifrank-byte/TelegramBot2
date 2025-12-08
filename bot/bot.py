@@ -2126,20 +2126,15 @@ def auto_cancel_expired_loop():
 
 
 def start_background_tasks():
-    """Запускает бэкапы и очистку. Безопасно вызывать из server.py"""
-    try:
-        # Проверяем, не запущены ли уже потоки (защита от дублей)
-        if threading.active_count() < 3: 
-            threading.Thread(target=auto_backup_loop, daemon=True).start()
-            # threading.Thread(target=auto_cancel_expired_loop, daemon=True).start() # Если есть эта функция
-            print("✅ Фоновые задачи запущены.")
-    except Exception as e:
-        print(f"Ошибка запуска задач: {e}")
+    """Запускает фоновые потоки один раз"""
+    if threading.active_count() < 3: # Простая защита от дублей
+        threading.Thread(target=auto_backup_loop, daemon=True).start()
+        # Если у вас есть auto_cancel_expired_loop - раскомментируйте:
+        # threading.Thread(target=auto_cancel_expired_loop, daemon=True).start()
+        print("✅ Фоновые задачи запущены.")
 
-# --- ГЛАВНЫЙ БЛОК ЗАПУСКА ---
+# Если файл запущен напрямую (локально)
 if __name__ == "__main__":
-    # Этот код сработает ТОЛЬКО если вы запускаете файл вручную (python bot.py)
-    # На Render (через server.py) этот код НЕ выполнится, что нам и нужно.
     print("🤖 Бот запущен локально (Polling)...")
     start_background_tasks()
     bot.infinity_polling()
