@@ -688,11 +688,11 @@ def cancel_order_handler(call):
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("check_"))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("check_"))
 def check_pay(call):
     oid = call.data.split("_")[1]
 
-    # --- ЗАЩИТА №1: Быстрая проверка ---
-    # Если заказ уже оплачен, даже не лезем в API платежки
+    # 1. Быстрая проверка
     order = get_order(oid)
     if not order:
         return bot.answer_callback_query(call.id, "Заказ не найден 🤷‍♂️")
@@ -710,33 +710,62 @@ def check_pay(call):
 
     bot.answer_callback_query(call.id, "Связываюсь с банком... ⏳")
 
-    # Проверяем оплату через API
+    # 2. Проверка оплаты через API
     if verify_payment_via_api(order.get("oxapay_track_id")):
 
-        # --- ЗАЩИТА №2: Финальная блокировка ---
-        # Перед тем как выдать товар, проверяем базу ЕЩЕ РАЗ.
-        # Вдруг за эту секунду пользователь нажал кнопку второй раз?
+        # 3. Финальная защита от повторного нажатия
         fresh_order_check = get_order(oid)
         if fresh_order_check["status"] == "paid":
-            return bot.send_message(
-                call.from_user.id, "⚠️ Вы уже получили этот товар (двойное нажатие)."
-            )
+            return bot.send_message(call.from_user.id, "⚠️ Вы уже получили этот товар.")
 
-        # 1. СНАЧАЛА обновляем статус в базе (Закрываем ворота)
+        # 4. БЛОКИРУЕМ ЗАКАЗ И ТОВАР
         update_order(oid, status="paid", delivery_status="delivered")
         mark_product_as_sold(order["product_id"])
 
-        # 2. ПОЛУЧАЕМ данные товара
+        # ======================================================
+        # 🚀 НОВАЯ ФИШКА: КИКАЕМ КОНКУРЕНТОВ
+        # ======================================================
+        try:
+            # Ищем всех, кто сидит на ЭТОМ ЖЕ товаре и ждет оплаты, КРОМЕ текущего победителя
+            losers = execute_query(
+                "SELECT order_id, user_id FROM orders WHERE product_id = %s AND status = 'waiting_payment' AND order_id != %s;",
+                (order["product_id"], oid),
+                fetch=True,
+            )
+
+            if losers:
+                # Массово отменяем их заказы в базе
+                execute_query(
+                    "UPDATE orders SET status = 'cancelled' WHERE product_id = %s AND status = 'waiting_payment' AND order_id != %s;",
+                    (order["product_id"], oid),
+                )
+
+                # Пишем им грустную новость
+                for loser_oid, loser_uid in losers:
+                    try:
+                        bot.send_message(
+                            loser_uid,
+                            f"😈🤮 <b>Хе-хе-хе! Твой заказ {loser_oid} превратился в пыль!</b>\n"
+                            f"Пока ты копался, кто-то более наглый и быстрый увел добычу прямо у тебя из-под носа!\n"
+                            f"Смирись с поражением и выбери что-то другое (если успеешь, ха-ха!).",
+                            parse_mode="HTML",
+                        )
+                    except:
+                        pass  # Если юзер заблочил бота
+        except Exception as e:
+            print(f"Ошибка при кике конкурентов: {e}")
+        # ======================================================
+
+        # 5. Получаем данные товара для выдачи
         details = get_product_details_by_id(order["product_id"])
 
-        # (Доп. защита: если товар вдруг удалили пока шла оплата)
         if not details:
             return bot.send_message(
                 call.from_user.id,
                 "🆘 Оплата прошла, но товар не найден! Срочно пишите админу.",
             )
 
-        # 3. И только теперь ОТПРАВЛЯЕМ фото
+        # 6. Выдаем товар
         msg = (
             f"✅ <b>Оплата получена!</b>\n"
             f"📦 {details['product_name']}\n"
@@ -745,13 +774,23 @@ def check_pay(call):
         )
         try:
             send_product_visuals(call.from_user.id, details["file_path"], msg)
-
-            # Обновляем сообщение с кнопкой, убираем кнопку "Проверить"
             bot.edit_message_text(
                 f"✅ Заказ {oid} успешно выдан.",
                 call.message.chat.id,
                 call.message.message_id,
             )
+
+            # Уведомление админу
+            for admin_id in ADMIN_IDS:
+                try:
+                    bot.send_message(
+                        admin_id,
+                        f"💰 <b>ПРОДАЖА!</b> {details['price_usd']}$ | {details['product_name']}",
+                        parse_mode="HTML",
+                    )
+                except:
+                    pass
+
         except Exception as e:
             bot.send_message(
                 call.from_user.id,
@@ -791,8 +830,9 @@ def exit_admin(m):
 # --- ДОБАВЛЕНИЕ ТОВАРА ---
 @bot.message_handler(func=lambda m: m.text == "➕ Добавить товар")
 def adm_add(m):
-    if m.from_user.id not in ADMIN_IDS: return
-    
+    if m.from_user.id not in ADMIN_IDS:
+        return
+
     # ИСПРАВЛЕНО: Очистка старого состояния перед началом
     if m.from_user.id in admin_state:
         del admin_state[m.from_user.id]
@@ -800,7 +840,11 @@ def adm_add(m):
     stores = get_all_stores()
     kb = types.InlineKeyboardMarkup()
     for s in stores:
-        kb.add(types.InlineKeyboardButton(s["title"], callback_data=f"aadd_s_{s['store_id']}"))
+        kb.add(
+            types.InlineKeyboardButton(
+                s["title"], callback_data=f"aadd_s_{s['store_id']}"
+            )
+        )
     bot.send_message(m.chat.id, "Куда?", reply_markup=kb)
 
 

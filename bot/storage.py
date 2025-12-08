@@ -142,18 +142,11 @@ def get_districts_for_product(product_name):
 
 def get_fresh_product_id(name, address):
     """
-    Ищет свободный товар, который:
-    1. НЕ продан (is_sold = FALSE)
-    2. НЕ находится сейчас в чьей-то корзине (нет активного ордера waiting_payment)
+    Ищет любой свободный ID товара с таким именем и районом.
     """
     query = """
-    SELECT p.product_id 
-    FROM products p
-    LEFT JOIN orders o ON p.product_id = o.product_id AND o.status = 'waiting_payment'
-    WHERE p.name = %s 
-      AND p.address = %s 
-      AND p.is_sold = FALSE 
-      AND o.product_id IS NULL  -- Это условие отсекает товары, которые сейчас 'в ожидании'
+    SELECT product_id FROM products 
+    WHERE name = %s AND address = %s AND is_sold = FALSE 
     LIMIT 1;
     """
     res = execute_query(query, (name, address), fetch=True)
