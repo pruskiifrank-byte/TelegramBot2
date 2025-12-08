@@ -194,37 +194,42 @@ def send_product_visuals(chat_id, file_path_str, caption):
 
 
 def anti_flood(func):
+    """Декоратор для защиты от спама и ошибок сети"""
+
     def wrapper(message):
         # 1. Определяем ID пользователя
-        if isinstance(message, types.CallbackQuery):
-            uid = message.from_user.id
-            msg_date = message.message.date  # Время отправки сообщения
-        else:
-            uid = message.chat.id
-            msg_date = message.date
+        try:
+            if isinstance(message, types.CallbackQuery):
+                uid = message.from_user.id
+                msg_date = message.message.date
+            else:
+                uid = message.chat.id
+                msg_date = message.date
+        except AttributeError:
+            return  # Если пришло что-то странное, игнорируем
 
         now = time.time()
 
-        # --- ЗАЩИТА 1: Очистка очереди (Фильтр старых запросов) ---
-        # Если бот "задумался" и сообщение висит в очереди дольше 2 секунд — выкидываем его.
-        # Это решает проблему, когда вы натыкали 10 раз, и бот начал отвечать на все подряд с задержкой.
-        if now - msg_date > 2:
+        # 2. Фильтр старых сообщений (защита от лагов)
+        if now - msg_date > 5:  # Увеличим до 5 секунд для надежности
             return
 
-        # --- ЗАЩИТА 2: Сброс таймера (Наказание за спам) ---
-        # Логика: Если ты спамишь, таймер обновляется на СЕЙЧАС.
-        # То есть, чтобы нажать снова, нужно реально ПЕРЕСТАТЬ нажимать и подождать.
+        # 3. Анти-флуд (таймер)
         last_time = flood_control.get(uid, 0)
-
         if now - last_time < FLOOD_LIMIT:
-            # Обновляем время даже при неудачной попытке!
-            # Человек сам себе продлевает блокировку каждым лишним кликом.
             flood_control[uid] = now
             return
 
-        # Если все ок — пропускаем и запоминаем время
         flood_control[uid] = now
-        return func(message)
+
+        # 4. ВЫПОЛНЕНИЕ ФУНКЦИИ С ЗАЩИТОЙ ОТ ОШИБОК
+        try:
+            return func(message)
+        except Exception as e:
+            # Ловим сетевые ошибки (ConnectionError, ApiTelegramException и др.)
+            print(f"⚠️ Ошибка в обработчике {func.__name__}: {e}")
+            # Можно попробовать отправить юзеру сообщение об ошибке, если это уместно
+            # Но лучше просто залогировать, чтобы бот не упал.
 
     return wrapper
 
@@ -1623,29 +1628,58 @@ def create_backup_zip():
 # --- ФОНОВАЯ ЗАДАЧА АВТО-БЭКАПА ---
 def auto_backup_loop():
     while True:
-        # Ждем 4 часа (14400 секунд)
-        time.sleep(14400)
+        # 1. Ждем 1 час перед следующей проверкой (чтобы не грузить базу)
+        time.sleep(3600)
 
-        # Создаем бэкап
-        zip_file = create_backup_zip()
-        if zip_file:
-            date_str = datetime.now().strftime("%Y-%m-%d")
-            filename = f"AUTO_BACKUP_{date_str}.zip"
+        # Получаем текущую дату
+        today = datetime.now().strftime("%Y-%m-%d")
 
-            # Рассылаем всем админам
-            for admin_id in ADMIN_IDS:
-                try:
-                    # Важно: нужно отмотать буфер в начало для каждого админа
-                    zip_file.seek(0)
-                    bot.send_document(
-                        admin_id,
-                        zip_file,
-                        caption=f"🕒 <b>Ежедневный авто-бэкап</b>\n📅 {date_str}",
-                        visible_file_name=filename,
-                        parse_mode="HTML",
-                    )
-                except Exception as e:
-                    print(f"Backup send error: {e}")
+        try:
+            # 2. Проверяем в БД, был ли уже бэкап сегодня
+            res = execute_query(
+                "SELECT setting_value FROM bot_settings WHERE setting_key = 'last_backup_date';",
+                fetch=True,
+            )
+            last_date = res[0][0] if res else ""
+
+            # Если сегодня уже делали — пропускаем
+            if last_date == today:
+                continue
+
+            # 3. Если не делали — создаем бэкап
+            zip_file = create_backup_zip()
+            if zip_file:
+                filename = f"AUTO_BACKUP_{today}.zip"
+
+                # Рассылаем админам
+                for admin_id in ADMIN_IDS:
+                    try:
+                        zip_file.seek(0)
+                        bot.send_document(
+                            admin_id,
+                            zip_file,
+                            caption=f"🕒 <b>Ежедневный авто-бэкап</b>\n📅 {today}",
+                            visible_file_name=filename,
+                            parse_mode="HTML",
+                        )
+                    except Exception as e:
+                        print(f"Ошибка отправки бэкапа {admin_id}: {e}")
+
+                # 4. ЗАПИСЫВАЕМ ДАТУ В БД (Чтобы другие потоки не отправили второй раз)
+                execute_query(
+                    """
+                    INSERT INTO bot_settings (setting_key, setting_value) 
+                    VALUES ('last_backup_date', %s) 
+                    ON CONFLICT (setting_key) DO UPDATE 
+                    SET setting_value = EXCLUDED.setting_value;
+                """,
+                    (today,),
+                )
+
+                print(f"✅ Авто-бэкап за {today} выполнен.")
+
+        except Exception as e:
+            print(f"Backup loop error: {e}")
 
 
 # ==========================================
@@ -2127,11 +2161,11 @@ def auto_cancel_expired_loop():
 
 def start_background_tasks():
     """Запускает фоновые потоки один раз"""
-    if threading.active_count() < 3: # Простая защита от дублей
+    if threading.active_count() < 5:
         threading.Thread(target=auto_backup_loop, daemon=True).start()
-        # Если у вас есть auto_cancel_expired_loop - раскомментируйте:
-        # threading.Thread(target=auto_cancel_expired_loop, daemon=True).start()
+        threading.Thread(target=auto_cancel_expired_loop, daemon=True).start()
         print("✅ Фоновые задачи запущены.")
+
 
 # Если файл запущен напрямую (локально)
 if __name__ == "__main__":
