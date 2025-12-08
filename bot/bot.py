@@ -89,24 +89,21 @@ def is_maintenance_active():
     """
     global _maintenance_cache
 
-    # Если мы недавно меняли статус (через save), верим кешу сразу
-    # Если прошло много времени, можно обновить из БД (для синхронизации)
     if time.time() - _maintenance_cache["last_updated"] < CACHE_TTL:
         return _maintenance_cache["value"]
 
     try:
+        # ИСПРАВЛЕНО: Ключ в базе называется 'maintenance_mode', а не как функция
         res = execute_query(
-            "SELECT setting_value FROM bot_settings WHERE setting_key = 'is_maintenance_active()';",
+            "SELECT setting_value FROM bot_settings WHERE setting_key = 'maintenance_mode';",
             fetch=True,
         )
         status = res and res[0][0] == "1"
 
-        # Обновляем кеш
         _maintenance_cache = {"value": status, "last_updated": time.time()}
         return status
     except Exception as e:
         print(f"Ошибка чтения статуса паузы: {e}")
-        # Если БД упала, лучше вернуть то, что было в кеше, или False (открыть магазин)
         return _maintenance_cache["value"]
 
 
@@ -249,6 +246,10 @@ def main_menu():
 @bot.message_handler(commands=["start"])
 @anti_flood
 def cmd_start(message):
+
+    if message.from_user.id in admin_state:
+        del admin_state[message.from_user.id]
+
     upsert_user(
         message.chat.id, message.from_user.username, message.from_user.first_name
     )
@@ -765,6 +766,10 @@ def check_pay(call):
 # --- АДМИНКА ---
 @bot.message_handler(commands=["admin"])
 def admin_panel(message):
+
+    if message.from_user.id in admin_state:
+        del admin_state[message.from_user.id]
+
     if message.from_user.id not in ADMIN_IDS:
         return
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -786,16 +791,16 @@ def exit_admin(m):
 # --- ДОБАВЛЕНИЕ ТОВАРА ---
 @bot.message_handler(func=lambda m: m.text == "➕ Добавить товар")
 def adm_add(m):
-    if m.from_user.id not in ADMIN_IDS:
-        return
+    if m.from_user.id not in ADMIN_IDS: return
+    
+    # ИСПРАВЛЕНО: Очистка старого состояния перед началом
+    if m.from_user.id in admin_state:
+        del admin_state[m.from_user.id]
+
     stores = get_all_stores()
     kb = types.InlineKeyboardMarkup()
     for s in stores:
-        kb.add(
-            types.InlineKeyboardButton(
-                s["title"], callback_data=f"aadd_s_{s['store_id']}"
-            )
-        )
+        kb.add(types.InlineKeyboardButton(s["title"], callback_data=f"aadd_s_{s['store_id']}"))
     bot.send_message(m.chat.id, "Куда?", reply_markup=kb)
 
 
@@ -1346,6 +1351,7 @@ def import_start(message):
 def handle_csv_import(message):
     if message.from_user.id not in ADMIN_IDS:
         return
+
     if not message.document.file_name.lower().endswith(".csv"):
         return bot.send_message(
             message.chat.id, "❌ Это не CSV файл!", parse_mode="HTML"
@@ -1363,9 +1369,12 @@ def handle_csv_import(message):
         reader = csv.reader(csv_file, delimiter=";")
 
         success = 0
+        errors = 0  # ИСПРАВЛЕНО: Считаем ошибки
+
         for row in reader:
             if len(row) < 6:
                 continue
+            # Разбираем строку
             cat, name, price, addr, desc, fid = (
                 row[0],
                 row[1],
@@ -1374,6 +1383,7 @@ def handle_csv_import(message):
                 row[4],
                 row[5],
             )
+
             sid = get_store_id_by_title(cat.strip())
             if sid:
                 try:
@@ -1386,15 +1396,23 @@ def handle_csv_import(message):
                         addr.strip(),
                     )
                     success += 1
-                except:
-                    pass
+                except Exception as e:
+                    # ИСПРАВЛЕНО: Логируем ошибку в консоль и считаем её
+                    print(f"Ошибка импорта строки {row}: {e}")
+                    errors += 1
+            else:
+                errors += 1  # Магазин не найден
+
+        # ИСПРАВЛЕНО: Показываем статистику ошибок
         bot.send_message(
             message.chat.id,
-            f"✅ <b>Импорт завершен!</b>\nДобавлено: {success}",
+            f"✅ <b>Импорт завершен!</b>\n"
+            f"➕ Добавлено: {success}\n"
+            f"⚠️ Ошибок/Пропусков: {errors}",
             parse_mode="HTML",
         )
     except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Ошибка: {e}")
+        bot.send_message(message.chat.id, f"❌ Критическая ошибка файла: {e}")
 
 
 # --- ГЕНЕРАТОР ID ДЛЯ EXCEL ---
