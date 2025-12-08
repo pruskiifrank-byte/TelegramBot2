@@ -54,41 +54,73 @@ photo_timers = {}
 # Тех-пауза
 MAINTENANCE_FILE = "maintenance.state"
 
+# --- НАДЕЖНОЕ ХРАНЕНИЕ СТАТУСА (CACHE + DB) ---
+
+# Глобальный кеш, чтобы не дергать БД каждую секунду
+# Храним: {"value": True/False, "time": timestamp}
+_maintenance_cache = {"value": False, "last_updated": 0}
+CACHE_TTL = 60  # Обновлять кеш из БД раз в 60 секунд (на случай ручных правок в БД)
+
 
 def init_settings_table():
-    """Создает таблицу настроек, если её нет"""
-    query = """
-    CREATE TABLE IF NOT EXISTS bot_settings (
-        setting_key VARCHAR(50) PRIMARY KEY,
-        setting_value VARCHAR(255)
-    );
+    """Создает таблицу настроек при старте"""
+    execute_query(
+        """
+        CREATE TABLE IF NOT EXISTS bot_settings (
+            setting_key VARCHAR(50) PRIMARY KEY,
+            setting_value VARCHAR(255)
+        );
     """
-    execute_query(query)
+    )
 
 
-def load_maintenance_mode():
-    """Читает состояние из БД при запуске"""
+# Инициализируем таблицу сразу при импорте
+try:
+    init_settings_table()
+except Exception as e:
+    print(f"DB Init Error: {e}")
+
+
+def is_maintenance_active():
+    """
+    Главная функция проверки.
+    Возвращает True (пауза) или False (работаем).
+    Использует кеш, но обновляет его из БД.
+    """
+    global _maintenance_cache
+
+    # Если мы недавно меняли статус (через save), верим кешу сразу
+    # Если прошло много времени, можно обновить из БД (для синхронизации)
+    if time.time() - _maintenance_cache["last_updated"] < CACHE_TTL:
+        return _maintenance_cache["value"]
+
     try:
-        # Проверяем таблицу (на всякий случай, если первый запуск)
-        init_settings_table()
+        res = execute_query(
+            "SELECT setting_value FROM bot_settings WHERE setting_key = 'is_maintenance_active()';",
+            fetch=True,
+        )
+        status = res and res[0][0] == "1"
 
-        # Читаем настройку
-        query = "SELECT setting_value FROM bot_settings WHERE setting_key = 'maintenance_mode';"
-        res = execute_query(query, fetch=True)
-
-        if res:
-            return res[0][0] == "1"
-        return False
+        # Обновляем кеш
+        _maintenance_cache = {"value": status, "last_updated": time.time()}
+        return status
     except Exception as e:
-        print(f"Ошибка чтения настроек из БД: {e}")
-        return False
+        print(f"Ошибка чтения статуса паузы: {e}")
+        # Если БД упала, лучше вернуть то, что было в кеше, или False (открыть магазин)
+        return _maintenance_cache["value"]
 
 
-def save_maintenance_mode(is_enabled):
-    """Записывает состояние в БД"""
-    val = "1" if is_enabled else "0"
+def set_maintenance_mode(enable: bool):
+    """Включает/выключает паузу и пишет в БД + Кеш"""
+    global _maintenance_cache
+    val = "1" if enable else "0"
+
+    # 1. Сначала обновляем кеш (чтобы бот отреагировал мгновенно)
+    _maintenance_cache = {"value": enable, "last_updated": time.time() + 999999}
+    # (Ставим время в будущее, чтобы кеш не протух сразу)
+
+    # 2. Пишем в БД (чтобы сохранилось после перезагрузки)
     try:
-        # Используем Upsert (Вставить, а если есть - Обновить)
         query = """
         INSERT INTO bot_settings (setting_key, setting_value) 
         VALUES ('maintenance_mode', %s) 
@@ -97,11 +129,8 @@ def save_maintenance_mode(is_enabled):
         """
         execute_query(query, (val,))
     except Exception as e:
-        print(f"Ошибка записи настроек в БД: {e}")
+        print(f"Критическая ошибка сохранения статуса: {e}")
 
-
-# Инициализируем переменную при старте
-MAINTENANCE_MODE = load_maintenance_mode()
 
 # Ссыль на картинку с заказа
 ORDER_IMG = "AgACAgUAAxkBAAIR3GkwvRcNA3SAoqDSRicOyT0bFeAlAAJuC2sbRHuIVcqZZBo5CZGgAQADAgADeQADNgQ"
@@ -121,7 +150,7 @@ GRINCH_JOKES = [
 
 
 @bot.message_handler(
-    func=lambda m: MAINTENANCE_MODE and m.from_user.id not in ADMIN_IDS
+    func=lambda m: is_maintenance_active() and m.from_user.id not in ADMIN_IDS
 )
 def maintenance_message_block(message):
     """
@@ -138,7 +167,7 @@ def maintenance_message_block(message):
 
 
 @bot.callback_query_handler(
-    func=lambda c: MAINTENANCE_MODE and c.from_user.id not in ADMIN_IDS
+    func=lambda c: is_maintenance_active() and c.from_user.id not in ADMIN_IDS
 )
 def maintenance_callback_block(call):
     """
@@ -255,10 +284,7 @@ def back_to_main(call):
 
 # --- БЛОКИРОВЩИК (ТЕХ. ПАУЗА) ---
 @bot.message_handler(
-    func=lambda m: MAINTENANCE_MODE and m.from_user.id not in ADMIN_IDS
-)
-@bot.callback_query_handler(
-    func=lambda c: MAINTENANCE_MODE and c.from_user.id not in ADMIN_IDS
+    func=lambda m: is_maintenance_active() and m.from_user.id not in ADMIN_IDS
 )
 def maintenance_filter(call_or_message):
     # Определяем ID чата и пользователя
@@ -289,7 +315,7 @@ def maintenance_filter(call_or_message):
 @anti_flood
 def handle_buy(message):
 
-    if MAINTENANCE_MODE and message.from_user.id not in ADMIN_IDS:
+    if is_maintenance_active() and message.from_user.id not in ADMIN_IDS:
         return bot.send_message(
             message.chat.id, "⛔️ Магазин закрыт на тех. обслуживание!"
         )
@@ -316,7 +342,7 @@ def handle_buy(message):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("store_"))
 def handle_store(call):
 
-    if MAINTENANCE_MODE and call.from_user.id not in ADMIN_IDS:
+    if is_maintenance_active() and call.from_user.id not in ADMIN_IDS:
         return bot.answer_callback_query(
             call.id, "⛔️ Магазин на паузе!", show_alert=True
         )
@@ -449,7 +475,7 @@ def handle_district_selection(call):
 # --- СОЗДАНИЕ ЗАКАЗА ---
 @bot.callback_query_handler(func=lambda c: c.data.startswith("prod_"))
 def handle_prod_payment(call):
-    if MAINTENANCE_MODE and call.from_user.id not in ADMIN_IDS:
+    if is_maintenance_active() and call.from_user.id not in ADMIN_IDS:
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
         except:
@@ -1867,12 +1893,12 @@ def maintenance_menu(message):
     # Проверяем текущий статус
     status_text = (
         "🔴 ВКЛЮЧЕНА (Магазин закрыт)"
-        if MAINTENANCE_MODE
+        if is_maintenance_active()
         else "🟢 ВЫКЛЮЧЕНА (Магазин работает)"
     )
 
     kb = types.InlineKeyboardMarkup()
-    if MAINTENANCE_MODE:
+    if is_maintenance_active():
         # Если включена - кнопка выключить
         kb.add(
             types.InlineKeyboardButton("🟢 ОТКРЫТЬ МАГАЗИН", callback_data="maint_off")
@@ -1909,27 +1935,24 @@ def maintenance_ask(c):
 
 @bot.callback_query_handler(func=lambda c: c.data == "maint_on")
 def maintenance_on(c):
-    global MAINTENANCE_MODE
-    MAINTENANCE_MODE = True
-    save_maintenance_mode(True)
+    # 1. Включаем режим через правильную функцию
+    set_maintenance_mode(True)
 
-    # --- НОВАЯ ЛОГИКА: АВТО-ОТМЕНА ЗАКАЗОВ ---
+    # А глобальную переменную мы здесь НЕ трогаем, так как is_maintenance_active()
+    # сама прочитает новое значение из кеша/БД при следующем вызове.
+
+    # --- ЛОГИКА АВТО-ОТМЕНЫ ЗАКАЗОВ ---
     canceled_count = 0
     try:
-        # 1. Сначала узнаем, КОГО мы будем отменять (чтобы отправить им сообщение)
-        # Нам нужны ID заказа и ID пользователя для всех, кто ждет оплату
         pending_orders = execute_query(
             "SELECT order_id, user_id FROM orders WHERE status = 'waiting_payment';",
             fetch=True,
         )
 
-        # 2. Массово меняем статус в базе данных на 'cancelled'
-        # Делаем это ДО рассылки, чтобы если кто-то нажмет "Проверить оплату", ему уже отказало
         execute_query(
             "UPDATE orders SET status = 'cancelled' WHERE status = 'waiting_payment';"
         )
 
-        # 3. Уведомляем пользователей (если такие есть)
         if pending_orders:
             for row in pending_orders:
                 oid, uid = row
@@ -1938,20 +1961,18 @@ def maintenance_on(c):
                         uid,
                         f"⛔️ <b>Ваш заказ {oid} был автоматически отменен.</b>\n\n"
                         f"Магазин уходит на Техническое Обслуживание.\n"
-                        f"⚠️ <b>Пожалуйста, НЕ оплачивайте этот заказ!</b>\n"
-                        f"Ждем вас, когда работы закончатся.",
+                        f"⚠️ <b>Пожалуйста, НЕ оплачивайте этот заказ!</b>",
                         parse_mode="HTML",
                     )
                     canceled_count += 1
                 except:
-                    pass  # Если пользователь заблокировал бота, просто пропускаем
+                    pass
 
     except Exception as e:
-        # Если вдруг ошибка в базе, сообщаем админу, но паузу все равно включаем
         bot.send_message(c.message.chat.id, f"⚠️ Ошибка при отмене заказов: {e}")
     # -------------------------------------------
 
-    bot.answer_callback_query(c.id, "Магазин закрыт (статус сохранен)!")
+    bot.answer_callback_query(c.id, "Магазин закрыт!")
 
     status_msg = (
         "🔴 <b>ТЕХ. ПАУЗА ВКЛЮЧЕНА.</b>\n"
@@ -1971,9 +1992,8 @@ def maintenance_on(c):
 
 @bot.callback_query_handler(func=lambda c: c.data == "maint_off")
 def maintenance_off(c):
-    global MAINTENANCE_MODE
-    MAINTENANCE_MODE = False
-    save_maintenance_mode(False)  # <--- СОХРАНЯЕМ В ФАЙЛ
+    # 1. Выключаем режим через правильную функцию
+    set_maintenance_mode(False)
 
     bot.answer_callback_query(c.id, "Магазин открыт!")
     bot.edit_message_text(
