@@ -1,17 +1,14 @@
 # server.py
 from flask import Flask, request, abort
-from threading import Thread
-import time
 import telebot
 from telebot.types import InputMediaPhoto
 import os
 import json
 import logging
+import time
 
 # Импорты из бота
-from bot.config import TELEGRAM_TOKEN, OXAPAY_API_KEY, ADMIN_IDS
-
-# Импортируем бота, но НЕ запускаем polling здесь (он запустится в потоке ниже)
+from bot.config import TELEGRAM_TOKEN, OXAPAY_API_KEY, ADMIN_IDS, BASE_URL
 from bot.bot import bot, start_background_tasks
 
 # Импорты логики
@@ -24,29 +21,25 @@ from bot.storage import (
 )
 from bot.payment import handle_oxapay_callback, verify_payment_via_api
 
-# Настройка логирования (глушим лишний шум от сервера)
+# Настройка логов
 log = logging.getLogger("werkzeug")
 log.setLevel(logging.ERROR)
 
 app = Flask(__name__)
 
 
-# --- ВЫДАЧА ТОВАРА (ВАША ФУНКЦИЯ) ---
+# --- ВЫДАЧА ТОВАРА (Логика без изменений) ---
 def give_product(user_id, order_id):
     order = get_order(order_id)
     if not order:
-        print(f"Заказ {order_id} не найден.")
         return False
-
     if order["delivery_status"] == "delivered":
-        print(f"Заказ {order_id} уже был выдан ранее.")
         return True
 
     prod = get_product_details_by_id(order["product_id"])
     if not prod:
         return False
 
-    # Защита от повторной продажи
     try:
         check_sold = execute_query(
             "SELECT is_sold FROM products WHERE product_id = %s",
@@ -54,7 +47,6 @@ def give_product(user_id, order_id):
             fetch=True,
         )
         if check_sold and check_sold[0][0] == True:
-            print(f"Товар {order['product_id']} уже продан.")
             return False
     except:
         pass
@@ -85,7 +77,6 @@ def give_product(user_id, order_id):
         update_order(order_id, delivery_status="delivered")
         mark_product_as_sold(order["product_id"])
 
-        # Уведомление админам
         for adm in ADMIN_IDS:
             try:
                 bot.send_message(
@@ -100,25 +91,29 @@ def give_product(user_id, order_id):
         return False
 
 
-# --- ROUTES (МАРШРУТЫ) ---
-
-
-@app.route("/")
-def home():
-    return "Bot is running!", 200
+# --- ВЕБХУК ДЛЯ ТЕЛЕГРАМА ---
 
 
 @app.route(f"/webhook/{TELEGRAM_TOKEN}", methods=["POST"])
 def telegram_webhook():
-    # Этот вебхук нужен ТОЛЬКО если вы НЕ используете polling.
-    # Но так как мы делаем polling, этот маршрут оставим "на всякий случай",
-    # но он не будет использоваться.
+    """
+    Сюда Телеграм присылает обновления.
+    """
     if request.headers.get("content-type") == "application/json":
         json_string = request.get_data().decode("UTF-8")
         update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
+
+        # Обрабатываем сообщение
+        try:
+            bot.process_new_updates([update])
+        except Exception as e:
+            print(f"Ошибка обработки апдейта: {e}")
+
         return "OK", 200
     abort(403)
+
+
+# --- ОПЛАТА OXAPAY ---
 
 
 @app.route("/oxapay/ipn", methods=["POST"])
@@ -134,13 +129,11 @@ def oxapay_ipn():
 
     if status in ["paid", "confirmed", "complete"]:
         handle_oxapay_callback(data)
-
-        # Проверка API (если выключена - закомментируйте блок)
         try:
             if not verify_payment_via_api(track_id):
                 return "Fake Callback", 400
         except:
-            pass  # Если API OxaPay лагает, верим колбэку
+            pass
 
         order_info = get_order(order_id)
         if order_info:
@@ -149,28 +142,43 @@ def oxapay_ipn():
     return "OK", 200
 
 
-# --- ЗАПУСК БОТА В ФОНЕ ---
+@app.route("/")
+def home():
+    return "Webhook Bot is Running!", 200
 
 
-def run_bot_polling():
-    """Функция, которая запускает бота и держит его живым"""
-    print("🚀 Запуск Polling в отдельном потоке...")
-    try:
-        # Сначала запускаем задачи очистки и бэкапа
-        start_background_tasks()
-        # Запускаем бесконечный цикл бота
-        bot.infinity_polling(timeout=10, long_polling_timeout=5)
-    except Exception as e:
-        print(f"❌ Бот упал с ошибкой: {e}")
+# --- НАСТРОЙКА ПРИ СТАРТЕ ---
 
 
-# Мы создаем и запускаем поток ПРИ ИМПОРТЕ файла.
-# Gunicorn импортирует этот файл, и поток стартует автоматически.
-bot_thread = Thread(target=run_bot_polling)
-bot_thread.daemon = True  # Это значит, что поток умрет, если упадет сервер
-bot_thread.start()
+def setup_webhook():
+    """Устанавливаем вебхук при запуске сервера"""
+    # Удаляем старый, чтобы не было конфликтов
+    bot.remove_webhook()
+    time.sleep(1)
+
+    # Ставим новый
+    # BASE_URL должен быть без слеша в конце, например: https://myapp.onrender.com
+    url = f"{BASE_URL}/webhook/{TELEGRAM_TOKEN}"
+    print(f"🔗 Ставлю вебхук на: {url}")
+
+    status = bot.set_webhook(url=url)
+    if status:
+        print("✅ Вебхук успешно установлен!")
+    else:
+        print("❌ Ошибка установки вебхука!")
+
+
+# Запускаем фоновые задачи (бэкапы, очистка)
+start_background_tasks()
+
+# Устанавливаем вебхук (делаем это один раз при старте)
+# Важно: На Render это сработает, когда Gunicorn загрузит файл
+try:
+    setup_webhook()
+except Exception as e:
+    print(f"⚠️ Не удалось поставить вебхук при старте: {e}")
+
 
 if __name__ == "__main__":
-    # Этот блок сработает только при локальном запуске python server.py
-    # На Render его заменит Gunicorn
+    # Локальный запуск (для тестов)
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
