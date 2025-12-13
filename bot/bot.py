@@ -260,10 +260,6 @@ def cmd_start(message):
         f"🎄 Привет,  {message.from_user.first_name}! 🎁"
         " Добро пожаловать к Гринчу!\n\n"
         "Резервы в случае блокировки ⤵️⤵️⤵️\n"
-        "@scooby_doorezerv1 \n"
-        "@scooby_doorezerv2 \n"
-        "@scoobbyy_doo \n"
-        "@mrgrinchs \n"
         "Это все актуальные линки \n\n"
         f"<i>{joke}</i>"
     )
@@ -547,14 +543,20 @@ def handle_prod_payment(call):
         return bot.send_message(uid, "❌ Ошибка создания ссылки.")
 
     pay_url, track_id = res
+
+    raw_username = call.from_user.username
+    username = f"@{raw_username}" if raw_username else "Нет ника"
+
+    # 2. Передаем его в функцию БД
     real_oid = add_order(
-        uid,
-        real_pid,
-        details["price_usd"],
-        details["address"],
-        temp_oid,
-        track_id,
-        pay_url,
+        user_id=uid,
+        user_username=username,  # <--- НОВЫЙ АРГУМЕНТ
+        product_id=real_pid,
+        price=details["price_usd"],
+        pickup_address=details["address"],
+        order_id=temp_oid,
+        oxapay_track_id=track_id,
+        payment_url=pay_url,
     )
 
     bot.send_message(

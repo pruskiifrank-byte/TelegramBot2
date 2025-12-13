@@ -14,8 +14,8 @@ BASE_URL = os.getenv("BASE_URL")
 OXAPAY_API_KEY = os.getenv("OXAPAY_API_KEY")
 OXAPAY_API_BASE = "https://api.oxapay.com"
 
-ADMIN_IDS = [7145757897, 8347430991]
+ADMIN_IDS = [8431930561, 8347430991]
 # Линки на помощь
 SUPPORT_LINK = "https://t.me/НАШ_ОПЕРАТОР"  # Ссылка на оператора
-REVIEWS_LINK = "https://t.me/+NW9rf1wPSl5lZmM6" # Канал с отзывами
-NEWS_LINK = "https://t.me/mrgrinchs"   # Канал с новостями
+REVIEWS_LINK = "https://t.me/+NW9rf1wPSl5lZmM6"  # Канал с отзывами
+NEWS_LINK = "https://t.me/mrgrinchs"  # Канал с новостями

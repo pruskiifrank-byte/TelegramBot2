@@ -185,6 +185,7 @@ def delete_product(product_id):
 # --- ЗАКАЗЫ ---
 def add_order(
     user_id,
+    user_username,
     product_id,
     price_usd,
     pickup_address,
@@ -192,26 +193,69 @@ def add_order(
     oxapay_track_id,
     payment_url,
 ):
+    # Добавляем @ к нику для красоты
+    formatted_username = (
+        f"@{user_username}" if user_username != "No Username" else user_username
+    )
+
     query = """
     INSERT INTO orders (
-        order_id, user_id, product_id, price_usd, 
-        pickup_address, oxapay_track_id, payment_url, status, delivery_status
+        order_id, 
+        user_id,
+        buyer_username, 
+        product_id, 
+        
+        -- СНИМКИ (Новые поля)
+        buyer_username,   
+        product_name,     
+        store_title,      
+        
+        price_usd, 
+        pickup_address, 
+        oxapay_track_id, 
+        payment_url, 
+        status, 
+        delivery_status,
+
+        product_name,
+        store_title
     )
-    VALUES (%s, %s, %s, %s, %s, %s, %s, 'waiting_payment', 'pending');
+    SELECT 
+        %s,             -- order_id
+        %s,             -- user_id
+        %s,             -- buyer_username
+        p.product_id,
+        
+        %s,             -- buyer_username (вставляем переданный)
+        p.name,         -- product_name (копируем из таблицы products)
+        s.title,        -- store_title (копируем из таблицы stores)
+        
+        %s,             -- price_usd
+        %s,             -- pickup_address
+        %s,             -- oxapay_track_id
+        %s,             -- payment_url
+        'waiting_payment', 
+        'pending'
+    FROM products p
+    JOIN stores s ON p.store_id = s.store_id
+    WHERE p.product_id = %s
+    RETURNING order_id;
     """
-    execute_query(
-        query,
-        (
-            order_id,
-            user_id,
-            product_id,
-            price_usd,
-            pickup_address,
-            oxapay_track_id,
-            payment_url,
-        ),
+
+    # Обратите внимание: product_id передаем в самом конце для WHERE
+    params = (
+        order_id,
+        user_id,
+        user_username,
+        price_usd,
+        pickup_address,
+        oxapay_track_id,
+        payment_url,
+        product_id,
     )
-    return order_id
+
+    res = execute_query(query, params, fetch=True)
+    return res[0][0] if res else None
 
 
 def update_order(order_id, **kwargs):
