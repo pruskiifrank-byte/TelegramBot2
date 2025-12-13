@@ -547,7 +547,7 @@ def handle_prod_payment(call):
     raw_username = call.from_user.username
     username = f"@{raw_username}" if raw_username else "Нет ника"
 
-    # 2. Передаем его в функцию БД
+    # 2. Передаем его в функцию БД в
     real_oid = add_order(
         user_id=uid,
         user_username=username,  # <--- НОВЫЙ АРГУМЕНТ
