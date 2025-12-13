@@ -1082,7 +1082,7 @@ def give_final(m):
         mark_product_as_sold(pid)
 
         fake_oid = f"GIFT-{int(time.time())}"
-        add_order(uid, pid, 0, "Gift", fake_oid, "GIFT", "GIFT")
+        add_order(uid, "GiftReceiver", pid, 0, "Gift", fake_oid, "GIFT", "GIFT")
         update_order(fake_oid, status="paid", delivery_status="delivered")
 
         bot.send_message(m.chat.id, "✅ Выдано!")
