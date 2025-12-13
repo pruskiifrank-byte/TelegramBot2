@@ -246,12 +246,13 @@ def add_order(
     params = (
         order_id,
         user_id,
-        user_username,
+        user_username,  # 1-й раз (для buyer_username)
+        user_username,  # 2-й раз (для buyer_username в блоке снимков)
         price_usd,
         pickup_address,
         oxapay_track_id,
         payment_url,
-        product_id,
+        product_id,  # В самом конце для WHERE
     )
 
     res = execute_query(query, params, fetch=True)
