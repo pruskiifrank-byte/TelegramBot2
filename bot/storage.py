@@ -202,11 +202,10 @@ def add_order(
     INSERT INTO orders (
         order_id, 
         user_id,
-        buyer_username, 
         product_id, 
         
         -- СНИМКИ (Новые поля)
-        buyer_username,   
+        buyer_username,   -- ОСТАВЛЯЕМ ТОЛЬКО ЭТОТ (один раз!)
         product_name,     
         store_title,      
         
@@ -215,20 +214,16 @@ def add_order(
         oxapay_track_id, 
         payment_url, 
         status, 
-        delivery_status,
-
-        product_name,
-        store_title
+        delivery_status
     )
     SELECT 
         %s,             -- order_id
         %s,             -- user_id
-        %s,             -- buyer_username
         p.product_id,
         
         %s,             -- buyer_username (вставляем переданный)
-        p.name,         -- product_name (копируем из таблицы products)
-        s.title,        -- store_title (копируем из таблицы stores)
+        p.name,         -- product_name
+        s.title,        -- store_title
         
         %s,             -- price_usd
         %s,             -- pickup_address
@@ -242,17 +237,16 @@ def add_order(
     RETURNING order_id;
     """
 
-    # Обратите внимание: product_id передаем в самом конце для WHERE
+    # Соответствующие параметры (8 штук + 1 ID товара в конце)
     params = (
         order_id,
         user_id,
-        user_username,  # 1-й раз (для buyer_username)
-        user_username,  # 2-й раз (для buyer_username в блоке снимков)
+        formatted_username,  # buyer_username
         price_usd,
         pickup_address,
         oxapay_track_id,
         payment_url,
-        product_id,  # В самом конце для WHERE
+        product_id,  # Для WHERE
     )
 
     res = execute_query(query, params, fetch=True)

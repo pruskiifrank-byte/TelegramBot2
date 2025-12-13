@@ -10,6 +10,7 @@ import io
 import os
 import zipfile
 import random
+import socket
 from datetime import datetime
 from bot.stats import get_statistics
 from bot.db import execute_query
@@ -60,6 +61,10 @@ MAINTENANCE_FILE = "maintenance.state"
 # Храним: {"value": True/False, "time": timestamp}
 _maintenance_cache = {"value": False, "last_updated": 0}
 CACHE_TTL = 60  # Обновлять кеш из БД раз в 60 секунд (на случай ручных правок в БД)
+
+print("PID:", os.getpid())
+print("ENV:", os.environ)
+print("HOSTNAME:", socket.gethostname())
 
 
 def init_settings_table():
