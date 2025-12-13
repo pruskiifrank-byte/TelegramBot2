@@ -552,7 +552,7 @@ def handle_prod_payment(call):
         user_id=uid,
         user_username=username,  # <--- НОВЫЙ АРГУМЕНТ
         product_id=real_pid,
-        price=details["price_usd"],
+        price_usd=details["price_usd"],
         pickup_address=details["address"],
         order_id=temp_oid,
         oxapay_track_id=track_id,
