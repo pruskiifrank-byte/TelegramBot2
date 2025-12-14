@@ -241,6 +241,90 @@ def anti_flood(func):
     return wrapper
 
 
+def send_captcha(chat_id):
+    """Генерирует и отправляет капчу"""
+    print(f"🎲 Генерирую капчу для {chat_id}")  # ЛОГ
+    try:
+        code = str(random.randint(1000, 9999))
+        image = ImageCaptcha(width=280, height=90)
+        data = image.generate(code)
+
+        captcha_users[chat_id] = code
+        print(f"🔒 Юзер {chat_id} заперт в капче. Код: {code}")  # ЛОГ
+
+        bot.send_photo(
+            chat_id,
+            data,
+            caption="🤖 <b>ПРОВЕРКА НА БОТА</b>\nВведите цифры с картинки:",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        print(f"❌ Ошибка отправки капчи: {e}")
+        # Если ошибка — пускаем, чтобы не блокировать
+        if chat_id in captcha_users:
+            del captcha_users[chat_id]
+        show_main_menu_content(
+            types.Message(chat_id, None, None, None, None, None, None, None, None, None)
+        )
+
+
+# 🔥 ЭТОТ ОБРАБОТЧИК ДОЛЖЕН БЫТЬ ВЫШЕ ОСТАЛЬНЫХ!
+@bot.message_handler(func=lambda m: m.chat.id in captcha_users)
+def handle_captcha_response(message):
+    print(
+        f"📩 Сообщение от заблокированного юзера {message.chat.id}: {message.text}"
+    )  # ЛОГ
+    chat_id = message.chat.id
+    text = message.text
+
+    if not text:
+        bot.send_message(chat_id, "🔢 Введите цифры с картинки!")
+        return
+
+    if text == "/start":
+        send_captcha(chat_id)
+        return
+
+    correct_code = captcha_users.get(chat_id)
+
+    if text.strip() == correct_code:
+        print(f"✅ Юзер {chat_id} прошел капчу!")  # ЛОГ
+        bot.send_message(chat_id, "✅ Доступ разрешен!")
+        del captcha_users[chat_id]
+        show_main_menu_content(message)
+    else:
+        print(f"⛔️ Юзер {chat_id} ошибся (ввел {text}, надо {correct_code})")  # ЛОГ
+        bot.send_message(chat_id, "❌ Неверно! Пробуем еще раз.")
+        send_captcha(chat_id)
+
+
+@bot.message_handler(commands=["start"])
+@anti_flood
+def cmd_start(message):
+    uid = message.from_user.id
+    print(f"🚀 Нажат /start пользователем {uid}")  # ЛОГ
+
+    # --- ТЕСТОВЫЙ РЕЖИМ: ОТКЛЮЧАЕМ ВСЕ ПРОВЕРКИ ---
+    # Мы специально комментируем проверку Админа и БД,
+    # чтобы капча вылезла ГАРАНТИРОВАННО.
+
+    # if uid in ADMIN_IDS:
+    #     print("👑 Это админ, пускаем.")
+    #     show_main_menu_content(message)
+    #     return
+
+    # all_users = get_all_users()
+    # if message.chat.id in all_users:
+    #      print("👴 Это старый юзер, пускаем.")
+    #      show_main_menu_content(message)
+    #      return
+
+    # -----------------------------------------------
+
+    print("🆕 Отправляем капчу...")
+    send_captcha(message.chat.id)
+
+
 # --- МЕНЮ ---
 def main_menu():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -356,7 +440,7 @@ def cmd_start(message):
 
     # 2. Если юзер уже есть в БД (старый клиент) — пускаем сразу
     # Если вы хотите проверять ВСЕХ (даже старых), ЗАКОММЕНТИРУЙТЕ эти 4 строки:
-    # all_users = get_all_users() 
+    # all_users = get_all_users()
     # if message.chat.id in all_users:
     #     show_main_menu_content(message)
     #     return
