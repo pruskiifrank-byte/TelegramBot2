@@ -250,7 +250,11 @@ def anti_flood(func):
 
 
 def is_user_blocked(chat_id):
-    """Проверяет, заблокирован ли пользователь за ошибки капчи"""
+    """Проверяет, заблокирован ли пользователь"""
+    # 🔥 Админа никогда не блокируем!
+    if chat_id in ADMIN_IDS:
+        return False
+
     if chat_id not in captcha_attempts:
         return False
 
@@ -435,8 +439,7 @@ def main_menu():
     return kb
 
 
-@bot.message_handler(commands=["start"])
-@anti_flood
+# УБРАЛИ ДЕКОРАТОРЫ ЗДЕСЬ, ЧТОБЫ НЕ БЫЛО КОНФЛИКТА С CMD_START
 def show_main_menu_content(message):
     """
     Функция, которая показывает главное меню.
@@ -530,22 +533,38 @@ def handle_captcha_response(message):
 
 @bot.message_handler(commands=["start"])
 @anti_flood
+@bot.message_handler(commands=["start"])
+@anti_flood
 def cmd_start(message):
     uid = message.from_user.id
+    print(f"🚀 Нажат /start пользователем {uid}")
 
-    # 1. Если это Админ — пускаем сразу
+    # 1. СНАЧАЛА проверяем Админа (чтобы пустить даже если есть бан)
     if uid in ADMIN_IDS:
+        # Если админ был в списке капчи - выпускаем
+        if uid in captcha_users:
+            del captcha_users[uid]
         show_main_menu_content(message)
         return
 
-    # 2. Если юзер уже есть в БД (старый клиент) — пускаем сразу
-    # Если вы хотите проверять ВСЕХ (даже старых), ЗАКОММЕНТИРУЙТЕ эти 4 строки:
-    # all_users = get_all_users()
-    # if message.chat.id in all_users:
-    #     show_main_menu_content(message)
-    #     return
+    # 2. Проверка блокировки для обычных смертных
+    if is_user_blocked(uid):
+        minutes, seconds = get_remaining_block_time(uid)
+        bot.send_message(
+            uid,
+            f"🚫 Вы заблокированы на 5 минут за ошибки в капче.\n"
+            f"Осталось: {minutes} мин {seconds} сек.",
+        )
+        return
 
-    # 3. Если новенький — отправляем капчу
+    # 3. Если юзер старый - пускаем (раскомментируйте, если нужно)
+    all_users = get_all_users()
+    if message.chat.id in all_users:
+        show_main_menu_content(message)
+        return
+
+    # 4. Иначе капча
+    print("🆕 Отправляем капчу...")
     send_captcha(message.chat.id)
 
 
