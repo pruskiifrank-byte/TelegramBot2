@@ -57,7 +57,7 @@ CAPTCHA_BLOCK_DURATION = 300
 
 
 PRODUCTS_PER_PAGE = 5
-FLOOD_LIMIT = 0.7
+FLOOD_LIMIT = 2.7
 MAX_UNPAID_ORDERS = 1
 
 # Фотки
@@ -210,42 +210,44 @@ def send_product_visuals(chat_id, file_path_str, caption):
 
 
 def anti_flood(func):
-    """Декоратор для защиты от спама и ошибок сети"""
+    """Декоратор для защиты от спама"""
 
     def wrapper(message):
-        # 1. Определяем ID пользователя
+        # 1. Определяем ID
         try:
             if isinstance(message, types.CallbackQuery):
                 uid = message.from_user.id
-                msg_date = message.message.date
+                chat_id = message.message.chat.id
             else:
-                uid = message.chat.id
-                msg_date = message.date
+                uid = message.from_user.id
+                chat_id = message.chat.id
         except AttributeError:
-            return  # Если пришло что-то странное, игнорируем
+            return  # Если непонятный апдейт, пропускаем
+
+        # 2. Админов не проверяем на флуд (чтобы не бесить при тестах)
+        if uid in ADMIN_IDS:
+            return func(message)
 
         now = time.time()
-
-        # 2. Фильтр старых сообщений (защита от лагов)
-        if now - msg_date > 5:  # Увеличим до 5 секунд для надежности
-            return
-
-        # 3. Анти-флуд (таймер)
         last_time = flood_control.get(uid, 0)
+
+        # 3. ПРОВЕРКА
         if now - last_time < FLOOD_LIMIT:
-            flood_control[uid] = now
+            # Вычисляем, сколько осталось ждать
+            wait_time = int(FLOOD_LIMIT - (now - last_time)) + 1
+            print(f"🚫 ФЛУД: Юзер {uid} заблокирован на {wait_time}с")
+
+            # (Опционально) Можно сказать юзеру "Хватит тыкать", но лучше молчать,
+            # чтобы не спамить в ответ на спам.
             return
 
+        # 4. Обновляем время И выполняем функцию
         flood_control[uid] = now
 
-        # 4. ВЫПОЛНЕНИЕ ФУНКЦИИ С ЗАЩИТОЙ ОТ ОШИБОК
         try:
             return func(message)
         except Exception as e:
-            # Ловим сетевые ошибки (ConnectionError, ApiTelegramException и др.)
             print(f"⚠️ Ошибка в обработчике {func.__name__}: {e}")
-            # Можно попробовать отправить юзеру сообщение об ошибке, если это уместно
-            # Но лучше просто залогировать, чтобы бот не упал.
 
     return wrapper
 
