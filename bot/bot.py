@@ -47,6 +47,14 @@ admin_state = {}
 flood_control = {}
 captcha_users = {}
 
+# Словарь для отслеживания попыток капчи: {user_id: {"attempts": int, "block_until": float}}
+captcha_attempts = {}
+
+# Константы для капчи
+MAX_CAPTCHA_ATTEMPTS = 2
+CAPTCHA_BLOCK_DURATION = 300
+
+
 PRODUCTS_PER_PAGE = 5
 FLOOD_LIMIT = 0.7
 MAX_UNPAID_ORDERS = 1
@@ -241,34 +249,79 @@ def anti_flood(func):
     return wrapper
 
 
+def is_user_blocked(chat_id):
+    """Проверяет, заблокирован ли пользователь за ошибки капчи"""
+    if chat_id not in captcha_attempts:
+        return False
+
+    block_until = captcha_attempts[chat_id].get("block_until", 0)
+    if block_until > time.time():
+        return True
+    return False
+
+
+def get_remaining_block_time(chat_id):
+    """Возвращает оставшееся время блокировки в минутах и секундах"""
+    if chat_id not in captcha_attempts:
+        return 0, 0
+
+    block_until = captcha_attempts[chat_id].get("block_until", 0)
+    remaining = block_until - time.time()
+    if remaining <= 0:
+        return 0, 0
+
+    minutes = int(remaining // 60)
+    seconds = int(remaining % 60)
+    return minutes, seconds
+
+
 def send_captcha(chat_id):
-    """Генерирует и отправляет капчу"""
+    """Генерирует картинку с цифрами и отправляет юзеру"""
     print(f"🎲 Генерирую капчу для {chat_id}")  # ЛОГ
+
+    # Проверка блокировки
+    if is_user_blocked(chat_id):
+        minutes, seconds = get_remaining_block_time(chat_id)
+        bot.send_message(
+            chat_id,
+            f"🚫 Вы заблокированы на 5 минут за неверный ввод капчи.\n"
+            f"Осталось: {minutes} мин {seconds} сек.",
+        )
+        return
+
     try:
+        # 1. Генерируем случайный код
         code = str(random.randint(1000, 9999))
         image = ImageCaptcha(width=280, height=90)
         data = image.generate(code)
 
+        # 2. Запоминаем правильный ответ в словарь
         captcha_users[chat_id] = code
         print(f"🔒 Юзер {chat_id} заперт в капче. Код: {code}")  # ЛОГ
 
+        # 3. Отправляем фото
         bot.send_photo(
             chat_id,
             data,
             caption="🤖 <b>ПРОВЕРКА НА БОТА</b>\nВведите цифры с картинки:",
             parse_mode="HTML",
         )
+
     except Exception as e:
         print(f"❌ Ошибка отправки капчи: {e}")
         # Если ошибка — пускаем, чтобы не блокировать
         if chat_id in captcha_users:
             del captcha_users[chat_id]
+        # Сбрасываем попытки при ошибке системы
+        if chat_id in captcha_attempts:
+            del captcha_attempts[chat_id]
+
         show_main_menu_content(
             types.Message(chat_id, None, None, None, None, None, None, None, None, None)
-        )
+        )  # Костыль для запуска меню
 
 
-# 🔥 ЭТОТ ОБРАБОТЧИК ДОЛЖЕН БЫТЬ ВЫШЕ ОСТАЛЬНЫХ!
+# 🔥 НОВЫЙ ОБРАБОТЧИК: Ловит ВСЕ сообщения, если юзер в списке капчи
 @bot.message_handler(func=lambda m: m.chat.id in captcha_users)
 def handle_captcha_response(message):
     print(
@@ -277,25 +330,77 @@ def handle_captcha_response(message):
     chat_id = message.chat.id
     text = message.text
 
-    if not text:
-        bot.send_message(chat_id, "🔢 Введите цифры с картинки!")
+    # Проверка блокировки (на случай, если она наступила в другом потоке/процессе, хотя здесь threaded=False)
+    if is_user_blocked(chat_id):
+        minutes, seconds = get_remaining_block_time(chat_id)
+        bot.send_message(
+            chat_id, f"🚫 Вы заблокированы. Осталось: {minutes} мин {seconds} сек."
+        )
         return
 
+    if not text:  # Если прислали стикер или фото вместо текста
+        bot.send_message(chat_id, "🔢 Пожалуйста, введите цифры с картинки.")
+        return
+
+    # Если юзер нажал /start во время капчи — генерируем новую
     if text == "/start":
         send_captcha(chat_id)
         return
 
+    # Получаем правильный код из памяти
     correct_code = captcha_users.get(chat_id)
 
     if text.strip() == correct_code:
+        # ✅ ВЕРНО
         print(f"✅ Юзер {chat_id} прошел капчу!")  # ЛОГ
         bot.send_message(chat_id, "✅ Доступ разрешен!")
-        del captcha_users[chat_id]
+
+        # Удаляем из "тюрьмы" капчи
+        if chat_id in captcha_users:
+            del captcha_users[chat_id]
+
+        # Сбрасываем счетчик попыток при успехе
+        if chat_id in captcha_attempts:
+            del captcha_attempts[chat_id]
+
+        # Показываем меню
         show_main_menu_content(message)
     else:
+        # ❌ НЕВЕРНО
         print(f"⛔️ Юзер {chat_id} ошибся (ввел {text}, надо {correct_code})")  # ЛОГ
-        bot.send_message(chat_id, "❌ Неверно! Пробуем еще раз.")
-        send_captcha(chat_id)
+
+        # Увеличиваем счетчик ошибок
+        if chat_id not in captcha_attempts:
+            captcha_attempts[chat_id] = {"attempts": 0, "block_until": 0}
+
+        captcha_attempts[chat_id]["attempts"] += 1
+        attempts_left = MAX_CAPTCHA_ATTEMPTS - captcha_attempts[chat_id]["attempts"]
+
+        if captcha_attempts[chat_id]["attempts"] >= MAX_CAPTCHA_ATTEMPTS:
+            # БЛОКИРОВКА
+            block_until = time.time() + CAPTCHA_BLOCK_DURATION
+            captcha_attempts[chat_id]["block_until"] = block_until
+
+            # Удаляем из активной капчи, чтобы он не мог больше писать (пока не нажмет /start после разбана)
+            # Или оставляем, но handle_captcha_response будет отбивать его
+            # Лучше оставить в captcha_users, чтобы handle_captcha_response ловил его сообщения и говорил о бане
+
+            bot.send_message(
+                chat_id,
+                f"🚫 <b>Вы ввели неверный код 2 раза!</b>\n"
+                f"Блокировка на 5 минут.\n"
+                f"Попробуйте снова через 5 минут.",
+                parse_mode="HTML",
+            )
+        else:
+            # ПРЕДУПРЕЖДЕНИЕ
+            bot.send_message(
+                chat_id,
+                f"❌ Неверно! Осталось попыток: {attempts_left}.\n"
+                f"Попробуйте еще раз.",
+            )
+            # Генерируем новую капчу для безопасности (опционально, можно оставить старую)
+            send_captcha(chat_id)
 
 
 @bot.message_handler(commands=["start"])
@@ -304,18 +409,25 @@ def cmd_start(message):
     uid = message.from_user.id
     print(f"🚀 Нажат /start пользователем {uid}")  # ЛОГ
 
-    # --- ТЕСТОВЫЙ РЕЖИМ: ОТКЛЮЧАЕМ ВСЕ ПРОВЕРКИ ---
-    # Мы специально комментируем проверку Админа и БД,
-    # чтобы капча вылезла ГАРАНТИРОВАННО.
+    # Проверка блокировки при старте
+    if is_user_blocked(uid):
+        minutes, seconds = get_remaining_block_time(uid)
+        bot.send_message(
+            uid,
+            f"🚫 Вы заблокированы на 5 минут за ошибки в капче.\n"
+            f"Осталось: {minutes} мин {seconds} сек.",
+        )
+        return
 
-    # if uid in ADMIN_IDS:
-    #     print("👑 Это админ, пускаем.")
-    #     show_main_menu_content(message)
-    #     return
+    # 1. Если это Админ — пускаем сразу
+    if uid in ADMIN_IDS:
+        show_main_menu_content(message)
+        return
 
+    # 2. Если юзер уже есть в БД (старый клиент) — пускаем сразу
+    # Если вы хотите проверять ВСЕХ (даже старых), ЗАКОММЕНТИРУЙТЕ эти 4 строки:
     # all_users = get_all_users()
     # if message.chat.id in all_users:
-    #      print("👴 Это старый юзер, пускаем.")
     #      show_main_menu_content(message)
     #      return
 
