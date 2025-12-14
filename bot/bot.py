@@ -11,6 +11,7 @@ import os
 import zipfile
 import random
 import socket
+from captcha.image import ImageCaptcha
 from datetime import datetime
 from bot.stats import get_statistics
 from bot.db import execute_query
@@ -44,6 +45,7 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="HTML", threaded=False)
 user_state = {}
 admin_state = {}
 flood_control = {}
+captcha_users = {}
 
 PRODUCTS_PER_PAGE = 5
 FLOOD_LIMIT = 0.7
@@ -251,18 +253,23 @@ def main_menu():
 
 @bot.message_handler(commands=["start"])
 @anti_flood
-def cmd_start(message):
+def show_main_menu_content(message):
+    """
+    Функция, которая показывает главное меню.
+    Вызывается ТОЛЬКО после прохождения капчи или если это Админ.
+    """
+    # Очистка состояний
+    if message.chat.id in admin_state:
+        del admin_state[message.chat.id]
 
-    if message.from_user.id in admin_state:
-        del admin_state[message.from_user.id]
+    # Сохраняем/обновляем юзера в БД
+    username = message.from_user.username
+    first_name = message.from_user.first_name
+    upsert_user(message.chat.id, username, first_name)
 
-    upsert_user(
-        message.chat.id, message.from_user.username, message.from_user.first_name
-    )
     joke = random.choice(GRINCH_JOKES)
-
     welcome_text = (
-        f"🎄 Привет,  {message.from_user.first_name}! 🎁"
+        f"🎄 Привет, {first_name}! 🎁"
         " Добро пожаловать к Гринчу!\n\n"
         "Резервы в случае блокировки ⤵️⤵️⤵️\n"
         "Это все актуальные линки \n\n"
@@ -271,6 +278,88 @@ def cmd_start(message):
     bot.send_message(
         message.chat.id, welcome_text, reply_markup=main_menu(), parse_mode="HTML"
     )
+
+
+def send_captcha(chat_id):
+    """Генерирует картинку с цифрами и отправляет юзеру"""
+    try:
+        # 1. Генерируем случайный код (4 цифры)
+        code = str(random.randint(1000, 9999))
+
+        # 2. Создаем картинку
+        image = ImageCaptcha(width=280, height=90)
+        data = image.generate(code)  # Это байты картинки
+
+        # 3. Запоминаем правильный ответ для этого юзера
+        captcha_users[chat_id] = code
+
+        # 4. Отправляем
+        msg = bot.send_photo(
+            chat_id,
+            data,
+            caption="🤖 <b>ПРОВЕРКА НА БОТА</b>\nВведите цифры с картинки:",
+            parse_mode="HTML",
+        )
+
+        # 5. Ждем следующего сообщения от юзера
+        bot.register_next_step_handler(msg, check_captcha)
+
+    except Exception as e:
+        print(f"Ошибка капчи: {e}")
+        # Если капча сломалась — пускаем так (чтобы не блокировать людей)
+        # Нам нужно сымитировать объект message для вызова меню
+        # Но проще отправить сообщение об ошибке
+        bot.send_message(chat_id, "Капча сломалась, проходи так.")
+
+
+def check_captcha(message):
+    chat_id = message.chat.id
+    text = message.text
+
+    # Если юзер нажал /start во время ввода капчи — генерируем новую
+    if text == "/start":
+        send_captcha(chat_id)
+        return
+
+    # Получаем правильный код
+    correct_code = captcha_users.get(chat_id)
+
+    if text and text.strip() == correct_code:
+        # ✅ ВЕРНО
+        bot.send_message(chat_id, "✅ Доступ разрешен!")
+        # Удаляем из памяти
+        if chat_id in captcha_users:
+            del captcha_users[chat_id]
+
+        # Показываем меню
+        show_main_menu_content(message)
+    else:
+        # ❌ НЕВЕРНО
+        bot.send_message(chat_id, "❌ Неверно! Попробуйте еще раз.")
+        send_captcha(chat_id)
+
+
+@bot.message_handler(commands=["start"])
+@anti_flood
+def cmd_start(message):
+    # 1. Если это Админ — пускаем без капчи
+    if message.from_user.id in ADMIN_IDS:
+        show_main_menu_content(message)
+        return
+
+    # 2. Если юзер уже есть в БД (старый клиент) — тоже можно пустить без капчи
+    # (Чтобы не бесить постоянных покупателей).
+    # Если хотите проверять ВСЕГДА — закомментируйте блок ниже.
+
+    # --- БЛОК ПРОВЕРКИ СТАРЫХ ЮЗЕРОВ ---
+    all_users = get_all_users()  # Получаем список ID из базы
+    if message.chat.id in all_users:
+        show_main_menu_content(message)
+        return
+    # -----------------------------------
+
+    # 3. Иначе — отправляем капчу
+    send_captcha(message.chat.id)
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "cmd_main_menu")
