@@ -37,6 +37,7 @@ from bot.storage import (
     get_fresh_product_id,
     get_table_data,
     get_store_id_by_title,
+    check_user_exists,
 )
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="HTML", threaded=False)
@@ -403,28 +404,25 @@ def cmd_start(message):
     uid = message.from_user.id
     print(f"🚀 Нажат /start пользователем {uid}")
 
-    # Проверка блокировки при старте
+    # 1. Проверка блокировки
     if is_user_blocked(uid):
         minutes, seconds = get_remaining_block_time(uid)
-        bot.send_message(
-            uid,
-            f"🚫 Вы заблокированы на 5 минут за ошибки в капче.\n"
-            f"Осталось: {minutes} мин {seconds} сек.",
-        )
+        bot.send_message(uid, f"🚫 Вы заблокированы. Осталось: {minutes} мин.")
         return
 
-    # 1. Если это Админ — пускаем сразу
+    # 2. Админа пускаем всегда
     if uid in ADMIN_IDS:
         show_main_menu_content(message)
         return
 
-    # 2. Если юзер уже есть в БД — пускаем (раскомментируйте, если нужно)
-    # all_users = get_all_users()
-    # if message.chat.id in all_users:
-    #      show_main_menu_content(message)
-    #      return
+    # 3. 🔥 ПРАВИЛЬНАЯ ПРОВЕРКА СТАРОГО ЮЗЕРА 🔥
+    # Если юзер уже есть в базе — пускаем без капчи
+    if check_user_exists(uid):
+        print(f"👴 Старый пользователь {uid}, пускаем без капчи.")
+        show_main_menu_content(message)
+        return
 
-    # 3. Иначе капча
+    # 4. Иначе капча
     print("🆕 Отправляем капчу...")
     send_captcha(message.chat.id)
 

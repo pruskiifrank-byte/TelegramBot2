@@ -334,3 +334,9 @@ def get_store_id_by_title(title):
     if res:
         return res[0][0]
     return None
+
+def check_user_exists(user_id):
+    """Быстрая проверка наличия юзера в БД (возвращает True/False)"""
+    query = "SELECT 1 FROM users WHERE user_id = %s LIMIT 1;"
+    res = execute_query(query, (user_id,), fetch=True)
+    return bool(res)
