@@ -193,7 +193,8 @@ def add_order(
     oxapay_track_id,
     payment_url,
 ):
-    # Форматируем юзернейм
+    print(f"👀 ПОПЫТКА СОЗДАТЬ ЗАКАЗ: ID={order_id}, User={user_id}, Prod={product_id}")
+
     formatted_username = (
         f"@{user_username}"
         if user_username and user_username != "No Username"
@@ -202,39 +203,16 @@ def add_order(
 
     query = """
     INSERT INTO orders (
-        order_id, 
-        user_id, 
-        product_id, 
-        
-        -- Новые поля-снимки
-        buyer_username,
-        product_name,     
-        store_title,      
-        
-        price_usd, 
-        pickup_address, 
-        oxapay_track_id, 
-        payment_url, 
-        status, 
-        delivery_status,
-        created_at
+        order_id, user_id, product_id, 
+        buyer_username, product_name, store_title,      
+        price_usd, pickup_address, oxapay_track_id, payment_url, 
+        status, delivery_status, created_at
     )
     SELECT 
-        %s,             -- order_id
-        %s,             -- user_id
-        p.product_id,
-        
-        %s,             -- buyer_username
-        p.name,         -- product_name (берем из таблицы products)
-        s.title,        -- store_title (берем из таблицы stores)
-        
-        %s,             -- price_usd
-        %s,             -- pickup_address
-        %s,             -- oxapay_track_id
-        %s,             -- payment_url
-        'waiting_payment', 
-        'pending',
-        NOW()           -- Текущее время
+        %s, %s, p.product_id,
+        %s, p.name, s.title,
+        %s, %s, %s, %s,
+        'waiting_payment', 'pending', NOW()
     FROM products p
     JOIN stores s ON p.store_id = s.store_id
     WHERE p.product_id = %s
@@ -242,27 +220,26 @@ def add_order(
     """
 
     params = (
-        order_id,
-        user_id,
-        formatted_username,  # buyer_username
-        price_usd,
+        str(order_id),  # Принудительно строка
+        int(user_id),  # Принудительно число (BigInt)
+        formatted_username,
+        float(price_usd),  # Принудительно float
         pickup_address,
         oxapay_track_id,
         payment_url,
-        product_id,  # Для WHERE
+        int(product_id),  # Принудительно число
     )
 
-    # Выполняем с fetch=True, чтобы получить order_id обратно
-    # Если вернется ID - значит запись прошла успешно
-    res = execute_query(query, params, fetch=True)
-
-    if res:
-        print(f"✅ Заказ {order_id} успешно записан в БД.")
-        return res[0][0]
-    else:
-        print(
-            f"❌ Ошибка записи заказа {order_id} в БД! Возможно, товар {product_id} не найден."
-        )
+    try:
+        res = execute_query(query, params, fetch=True)
+        if res:
+            print(f"✅ УСПЕХ: Заказ {res[0][0]} создан в БД!")
+            return res[0][0]
+        else:
+            print(f"❌ НЕУДАЧА: Запрос вернул пустоту. Товар {product_id} существует?")
+            return None
+    except Exception as e:
+        print(f"🚨 CRITICAL SQL ERROR: {e}")
         return None
 
 
@@ -300,28 +277,35 @@ def get_order(order_id):
 
 
 def find_orders_by_user(user_id):
+    print(f"🔎 ИЩУ ЗАКАЗЫ ДЛЯ: {user_id}")
     query = """
-    SELECT o.order_id, o.status, o.price_usd, p.name, o.delivery_status, o.payment_url, o.created_at
+    SELECT o.order_id, o.status, o.price_usd, o.product_name, o.delivery_status, o.payment_url, o.created_at
     FROM orders o
-    LEFT JOIN products p ON o.product_id = p.product_id
     WHERE o.user_id = %s 
     ORDER BY o.created_at DESC;
     """
-    results = execute_query(query, (user_id,), fetch=True)
+    # Обратите внимание: я заменил JOIN на выборку прямо из orders,
+    # так как мы теперь сохраняем product_name прямо в заказ.
+    # Это надежнее, если товар потом удалят.
+
+    results = execute_query(query, (int(user_id),), fetch=True)
+
+    if not results:
+        print(f"📭 Ничего не найдено для {user_id}")
+        return {}
+
+    print(f"🎉 Найдено {len(results)} заказов!")
     orders_dict = {}
-    if results:
-        for row in results:
-            oid, status, price, p_name, d_status, pay_url, created_at = row
-            if not p_name:
-                p_name = "Удаленный товар"
-            orders_dict[oid] = {
-                "status": status,
-                "price": float(price),
-                "product_name": p_name,
-                "delivery_status": d_status,
-                "payment_url": pay_url,
-                "created_at_ts": created_at.timestamp() if created_at else 0,
-            }
+    for row in results:
+        oid, status, price, p_name, d_status, pay_url, created_at = row
+        orders_dict[oid] = {
+            "status": status,
+            "price": float(price),
+            "product_name": p_name if p_name else "Неизвестный товар",
+            "delivery_status": d_status,
+            "payment_url": pay_url,
+            "created_at_ts": created_at.timestamp() if created_at else 0,
+        }
     return orders_dict
 
 
