@@ -555,7 +555,7 @@ def handle_prod_payment(call):
     # 2. Передаем его в функцию БД в
     real_oid = add_order(
         user_id=uid,
-        user_username=username,  # <--- НОВЫЙ АРГУМЕНТ
+        user_username=username,  # <--- ВАЖНО: передаем юзернейм
         product_id=real_pid,
         price_usd=details["price_usd"],
         pickup_address=details["address"],
@@ -1087,7 +1087,7 @@ def give_final(m):
         mark_product_as_sold(pid)
 
         fake_oid = f"GIFT-{int(time.time())}"
-        add_order(uid, "GiftReceiver", pid, 0, "Gift", fake_oid, "GIFT", "GIFT")
+        add_order(uid, "GiftUser", pid, 0, "Gift", fake_oid, "GIFT", "GIFT")
         update_order(fake_oid, status="paid", delivery_status="delivered")
 
         bot.send_message(m.chat.id, "✅ Выдано!")
