@@ -356,10 +356,10 @@ def cmd_start(message):
 
     # 2. Если юзер уже есть в БД (старый клиент) — пускаем сразу
     # Если вы хотите проверять ВСЕХ (даже старых), ЗАКОММЕНТИРУЙТЕ эти 4 строки:
-    all_users = get_all_users()
-    if message.chat.id in all_users:
-        show_main_menu_content(message)
-        return
+    # all_users = get_all_users() 
+    # if message.chat.id in all_users:
+    #     show_main_menu_content(message)
+    #     return
 
     # 3. Если новенький — отправляем капчу
     send_captcha(message.chat.id)
