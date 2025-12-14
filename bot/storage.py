@@ -193,19 +193,21 @@ def add_order(
     oxapay_track_id,
     payment_url,
 ):
-    # Добавляем @ к нику для красоты
+    # Форматируем юзернейм
     formatted_username = (
-        f"@{user_username}" if user_username != "No Username" else user_username
+        f"@{user_username}"
+        if user_username and user_username != "No Username"
+        else "No Username"
     )
 
     query = """
     INSERT INTO orders (
         order_id, 
-        user_id,
+        user_id, 
         product_id, 
         
-        -- СНИМКИ (Новые поля)
-        buyer_username,   -- ОСТАВЛЯЕМ ТОЛЬКО ЭТОТ (один раз!)
+        -- Новые поля-снимки
+        buyer_username,
         product_name,     
         store_title,      
         
@@ -214,30 +216,31 @@ def add_order(
         oxapay_track_id, 
         payment_url, 
         status, 
-        delivery_status
+        delivery_status,
+        created_at
     )
     SELECT 
         %s,             -- order_id
         %s,             -- user_id
         p.product_id,
         
-        %s,             -- buyer_username (вставляем переданный)
-        p.name,         -- product_name
-        s.title,        -- store_title
+        %s,             -- buyer_username
+        p.name,         -- product_name (берем из таблицы products)
+        s.title,        -- store_title (берем из таблицы stores)
         
         %s,             -- price_usd
         %s,             -- pickup_address
         %s,             -- oxapay_track_id
         %s,             -- payment_url
         'waiting_payment', 
-        'pending'
+        'pending',
+        NOW()           -- Текущее время
     FROM products p
     JOIN stores s ON p.store_id = s.store_id
     WHERE p.product_id = %s
     RETURNING order_id;
     """
 
-    # Соответствующие параметры (8 штук + 1 ID товара в конце)
     params = (
         order_id,
         user_id,
@@ -249,8 +252,18 @@ def add_order(
         product_id,  # Для WHERE
     )
 
+    # Выполняем с fetch=True, чтобы получить order_id обратно
+    # Если вернется ID - значит запись прошла успешно
     res = execute_query(query, params, fetch=True)
-    return res[0][0] if res else None
+
+    if res:
+        print(f"✅ Заказ {order_id} успешно записан в БД.")
+        return res[0][0]
+    else:
+        print(
+            f"❌ Ошибка записи заказа {order_id} в БД! Возможно, товар {product_id} не найден."
+        )
+        return None
 
 
 def update_order(order_id, **kwargs):
